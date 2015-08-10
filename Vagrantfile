@@ -136,6 +136,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
     if $use_nfs then
       config.vm.synced_folder ".", "/vagrant", nfs: true
+      config.vm.synced_folder "./devicemapper", "/devicemapper", nfs: true
     end
 
     # Try VMWare Fusion first (see

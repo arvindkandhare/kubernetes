@@ -275,7 +275,9 @@ function kube-up {
    vagrant ssh master -- sudo cat /srv/kubernetes/kubecfg.key >"${KUBE_KEY}" 2>/dev/null
    vagrant ssh master -- sudo cat /srv/kubernetes/ca.crt >"${CA_CERT}" 2>/dev/null
 
+	echo "IM HERE"
    create-kubeconfig
+	echo "IM HERE"
   )
 
   verify-cluster
