@@ -92,7 +92,7 @@ func (g *conversionGenerator) GenerateConversionsForType(version string, reflect
 	}
 	internalObjType := reflect.TypeOf(internalObj)
 	if internalObjType.Kind() != reflect.Ptr {
-		return fmt.Errorf("created object should be of type Ptr: ", internalObjType.Kind())
+		return fmt.Errorf("created object should be of type Ptr: %v", internalObjType.Kind())
 	}
 	inErr := g.generateConversionsBetween(reflection, internalObjType.Elem())
 	outErr := g.generateConversionsBetween(internalObjType.Elem(), reflection)
@@ -173,7 +173,6 @@ func (g *conversionGenerator) generateConversionsBetween(inType, outType reflect
 		// All simple types should be handled correctly with default conversion.
 		return nil
 	}
-	panic("This should never happen")
 }
 
 func isComplexType(reflection reflect.Type) bool {
@@ -195,8 +194,8 @@ func (g *conversionGenerator) generateConversionsForMap(inType, outType reflect.
 	}
 	inValue := inType.Elem()
 	outValue := outType.Elem()
-	g.addImportByPath(inKey.PkgPath())
-	g.addImportByPath(outKey.PkgPath())
+	g.addImportByPath(inValue.PkgPath())
+	g.addImportByPath(outValue.PkgPath())
 	if err := g.generateConversionsBetween(inValue, outValue); err != nil {
 		return err
 	}

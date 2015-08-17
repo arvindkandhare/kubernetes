@@ -53,9 +53,9 @@ import (
 	controlleretcd "k8s.io/kubernetes/pkg/registry/controller/etcd"
 	"k8s.io/kubernetes/pkg/registry/endpoint"
 	endpointsetcd "k8s.io/kubernetes/pkg/registry/endpoint/etcd"
-	"k8s.io/kubernetes/pkg/registry/etcd"
-	"k8s.io/kubernetes/pkg/registry/event"
-	"k8s.io/kubernetes/pkg/registry/limitrange"
+	eventetcd "k8s.io/kubernetes/pkg/registry/event/etcd"
+	expcontrolleretcd "k8s.io/kubernetes/pkg/registry/experimental/controller/etcd"
+	limitrangeetcd "k8s.io/kubernetes/pkg/registry/limitrange/etcd"
 	"k8s.io/kubernetes/pkg/registry/minion"
 	nodeetcd "k8s.io/kubernetes/pkg/registry/minion/etcd"
 	"k8s.io/kubernetes/pkg/registry/namespace"
@@ -68,6 +68,7 @@ import (
 	secretetcd "k8s.io/kubernetes/pkg/registry/secret/etcd"
 	"k8s.io/kubernetes/pkg/registry/service"
 	etcdallocator "k8s.io/kubernetes/pkg/registry/service/allocator/etcd"
+	serviceetcd "k8s.io/kubernetes/pkg/registry/service/etcd"
 	ipallocator "k8s.io/kubernetes/pkg/registry/service/ipallocator"
 	serviceaccountetcd "k8s.io/kubernetes/pkg/registry/serviceaccount/etcd"
 	"k8s.io/kubernetes/pkg/storage"
@@ -75,6 +76,8 @@ import (
 	"k8s.io/kubernetes/pkg/tools"
 	"k8s.io/kubernetes/pkg/ui"
 	"k8s.io/kubernetes/pkg/util"
+
+	horizontalpodautoscaleretcd "k8s.io/kubernetes/pkg/registry/horizontalpodautoscaler/etcd"
 
 	"github.com/emicklei/go-restful"
 	"github.com/emicklei/go-restful/swagger"
@@ -313,7 +316,7 @@ func setDefaults(c *Config) {
 // Public fields:
 //   Handler -- The returned master has a field TopHandler which is an
 //   http.Handler which handles all the endpoints provided by the master,
-//   including the API, the UI, and miscelaneous debugging endpoints.  All
+//   including the API, the UI, and miscellaneous debugging endpoints.  All
 //   these are subject to authorization and authentication.
 //   InsecureHandler -- an http.Handler which handles all the same
 //   endpoints as Handler, but no authorization and authentication is done.
@@ -375,7 +378,7 @@ func New(c *Config) *Master {
 	m.handlerContainer = handlerContainer
 	// Use CurlyRouter to be able to use regular expressions in paths. Regular expressions are required in paths for example for proxy (where the path is proxy/{kind}/{name}/{*})
 	m.handlerContainer.Router(restful.CurlyRouter{})
-	m.muxHelper = &apiserver.MuxHelper{m.mux, []string{}}
+	m.muxHelper = &apiserver.MuxHelper{Mux: m.mux, RegisteredPaths: []string{}}
 
 	m.init(c)
 
@@ -431,8 +434,8 @@ func (m *Master) init(c *Config) {
 
 	podTemplateStorage := podtemplateetcd.NewREST(c.DatabaseStorage)
 
-	eventRegistry := event.NewEtcdRegistry(c.DatabaseStorage, uint64(c.EventTTL.Seconds()))
-	limitRangeRegistry := limitrange.NewEtcdRegistry(c.DatabaseStorage)
+	eventStorage := eventetcd.NewStorage(c.DatabaseStorage, uint64(c.EventTTL.Seconds()))
+	limitRangeStorage := limitrangeetcd.NewStorage(c.DatabaseStorage)
 
 	resourceQuotaStorage, resourceQuotaStatusStorage := resourcequotaetcd.NewStorage(c.DatabaseStorage)
 	secretStorage := secretetcd.NewStorage(c.DatabaseStorage)
@@ -449,9 +452,8 @@ func (m *Master) init(c *Config) {
 	nodeStorage, nodeStatusStorage := nodeetcd.NewStorage(c.DatabaseStorage, c.KubeletClient)
 	m.nodeRegistry = minion.NewRegistry(nodeStorage)
 
-	// TODO: split me up into distinct storage registries
-	registry := etcd.NewRegistry(c.DatabaseStorage, m.endpointRegistry)
-	m.serviceRegistry = registry
+	serviceStorage := serviceetcd.NewStorage(c.DatabaseStorage)
+	m.serviceRegistry = service.NewRegistry(serviceStorage)
 
 	var serviceClusterIPRegistry service.RangeRegistry
 	serviceClusterIPAllocator := ipallocator.NewAllocatorCIDRRange(m.serviceClusterIPRange, func(max int, rangeSpec string) allocator.Interface {
@@ -492,9 +494,9 @@ func (m *Master) init(c *Config) {
 		"endpoints":              endpointsStorage,
 		"nodes":                  nodeStorage,
 		"nodes/status":           nodeStatusStorage,
-		"events":                 event.NewStorage(eventRegistry),
+		"events":                 eventStorage,
 
-		"limitRanges":                   limitrange.NewStorage(limitRangeRegistry),
+		"limitRanges":                   limitRangeStorage,
 		"resourceQuotas":                resourceQuotaStorage,
 		"resourceQuotas/status":         resourceQuotaStatusStorage,
 		"namespaces":                    namespaceStorage,
@@ -548,7 +550,7 @@ func (m *Master) init(c *Config) {
 				httpKubeletClient.Client.Transport = transport
 			}
 		} else {
-			glog.Errorf("Failed to cast %v to HTTPKubeletClient, skipping SSH tunnel.")
+			glog.Errorf("Failed to cast %v to HTTPKubeletClient, skipping SSH tunnel.", c.KubeletClient)
 		}
 		healthzChecks = append(healthzChecks, healthz.NamedCheck("SSH Tunnel Check", m.IsTunnelSyncHealthy))
 		m.lastSyncMetric = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
@@ -568,7 +570,7 @@ func (m *Master) init(c *Config) {
 	apiserver.InstallSupport(m.muxHelper, m.rootWebService, c.EnableProfiling, healthzChecks...)
 	apiserver.AddApiWebService(m.handlerContainer, c.APIPrefix, apiVersions)
 	defaultVersion := m.defaultAPIGroupVersion()
-	requestInfoResolver := &apiserver.APIRequestInfoResolver{util.NewStringSet(strings.TrimPrefix(defaultVersion.Root, "/")), defaultVersion.Mapper}
+	requestInfoResolver := &apiserver.APIRequestInfoResolver{APIPrefixes: util.NewStringSet(strings.TrimPrefix(defaultVersion.Root, "/")), RestMapper: defaultVersion.Mapper}
 	apiserver.InstallServiceErrorHandler(m.handlerContainer, requestInfoResolver, apiVersions)
 
 	if m.exp {
@@ -577,7 +579,7 @@ func (m *Master) init(c *Config) {
 			glog.Fatalf("Unable to setup experimental api: %v", err)
 		}
 		apiserver.AddApiWebService(m.handlerContainer, c.ExpAPIPrefix, []string{expVersion.Version})
-		expRequestInfoResolver := &apiserver.APIRequestInfoResolver{util.NewStringSet(strings.TrimPrefix(expVersion.Root, "/")), expVersion.Mapper}
+		expRequestInfoResolver := &apiserver.APIRequestInfoResolver{APIPrefixes: util.NewStringSet(strings.TrimPrefix(expVersion.Root, "/")), RestMapper: expVersion.Mapper}
 		apiserver.InstallServiceErrorHandler(m.handlerContainer, expRequestInfoResolver, []string{expVersion.Version})
 	}
 
@@ -777,7 +779,15 @@ func (m *Master) api_v1() *apiserver.APIGroupVersion {
 
 // expapi returns the resources and codec for the experimental api
 func (m *Master) expapi(c *Config) *apiserver.APIGroupVersion {
-	storage := map[string]rest.Storage{}
+	controllerStorage := expcontrolleretcd.NewStorage(c.DatabaseStorage)
+	autoscalerStorage := horizontalpodautoscaleretcd.NewREST(c.DatabaseStorage)
+
+	storage := map[string]rest.Storage{
+		strings.ToLower("replicationControllers"):       controllerStorage.ReplicationController,
+		strings.ToLower("replicationControllers/scale"): controllerStorage.Scale,
+		strings.ToLower("horizontalpodautoscalers"):     autoscalerStorage,
+	}
+
 	return &apiserver.APIGroupVersion{
 		Root: m.expAPIPrefix,
 

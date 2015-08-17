@@ -83,7 +83,7 @@ func (self *Scheme) embeddedObjectToRawExtension(in *EmbeddedObject, out *RawExt
 		return err
 	}
 
-	// Copy the kind field into the ouput object.
+	// Copy the kind field into the output object.
 	err = s.Convert(
 		&emptyPlugin{PluginBase: PluginBase{Kind: kind}},
 		outObj,
@@ -440,6 +440,19 @@ func (s *Scheme) EncodeToVersion(obj Object, destVersion string) (data []byte, e
 // will be converted into the in-memory unversioned type before being returned.
 func (s *Scheme) Decode(data []byte) (Object, error) {
 	obj, err := s.raw.Decode(data)
+	if err != nil {
+		return nil, err
+	}
+	return obj.(Object), nil
+}
+
+// DecodeToVersion converts a YAML or JSON string back into a pointer to an api
+// object.  Deduces the type based upon the APIVersion and Kind fields, which
+// are set by Encode. Only versioned objects (APIVersion != "") are
+// accepted. The object will be converted into the in-memory versioned type
+// requested before being returned.
+func (s *Scheme) DecodeToVersion(data []byte, version string) (Object, error) {
+	obj, err := s.raw.DecodeToVersion(data, version)
 	if err != nil {
 		return nil, err
 	}

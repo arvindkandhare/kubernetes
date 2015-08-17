@@ -95,16 +95,21 @@ GCE_DEFAULT_SKIP_TESTS=(
 
 # The following tests are known to be flaky, and are thus run only in their own
 # -flaky- build variants.
-GCE_FLAKY_TESTS=()
+GCE_FLAKY_TESTS=(
+    "Autoscaling"
+    "ResourceUsage"
+    )
 
 # Tests which are not able to be run in parallel.
 GCE_PARALLEL_SKIP_TESTS=(
     ${GCE_DEFAULT_SKIP_TESTS[@]:+${GCE_DEFAULT_SKIP_TESTS[@]}}
+    "Autoscaling"
     "Etcd"
     "NetworkingNew"
     "Nodes\sNetwork"
     "Nodes\sResize"
     "MaxPods"
+    "ResourceUsage"
     "SchedulerPredicates"
     "Services.*restarting"
     "Shell.*services"
@@ -122,6 +127,27 @@ GCE_PARALLEL_FLAKY_TESTS=(
     "Services.*release.*load\sbalancer"
     )
 
+# Tests that should not run on soak cluster.
+GCE_SOAK_CONTINUOUS_SKIP_TESTS=(
+    "Autoscaling"
+    "Density.*30\spods"
+    "Elasticsearch"
+    "Etcd.*SIGKILL"
+    "external\sload\sbalancer"    
+    "identically\snamed\sservices"
+    "network\spartition"
+    "Reboot"
+    "Resize"
+    "Restart"
+    "Services.*Type\sgoes\sfrom"
+    "Services.*nodeport\ssettings"
+    "Skipped"
+    )
+
+GCE_RELEASE_SKIP_TESTS=(
+    "Autoscaling"
+    )
+
 # Define environment variables based on the Jenkins project name.
 case ${JOB_NAME} in
   # Runs all non-flaky tests on GCE, sequentially.
@@ -135,6 +161,8 @@ case ${JOB_NAME} in
           )"}
     : ${KUBE_GCE_INSTANCE_PREFIX="e2e-gce"}
     : ${PROJECT:="k8s-jkns-e2e-gce"}
+    # Override GCE default for cluster size autoscaling purposes.
+    ENABLE_CLUSTER_MONITORING="googleinfluxdb"
     ;;
 
   # Runs only the examples tests on GCE.
@@ -159,6 +187,8 @@ case ${JOB_NAME} in
           )"}
     : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-flaky"}
     : ${PROJECT:="k8s-jkns-e2e-gce-flaky"}
+    # Override GCE default for cluster size autoscaling purposes.
+    ENABLE_CLUSTER_MONITORING="googleinfluxdb"
     ;;
 
   # Runs all non-flaky tests on GCE in parallel.
@@ -199,7 +229,7 @@ case ${JOB_NAME} in
     : ${E2E_CLUSTER_NAME:="jenkins-gce-e2e-reboot"}
     : ${E2E_DOWN:="false"}
     : ${E2E_NETWORK:="e2e-reboot"}
-    : ${GINKGO_TEST_ARGS:=" --ginkgo.focus=Reboot"}
+    : ${GINKGO_TEST_ARGS:="--ginkgo.focus=Reboot"}
     : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-reboot"}
     : ${PROJECT:="kubernetes-jenkins"}
     ;;
@@ -216,6 +246,19 @@ case ${JOB_NAME} in
     MINION_SIZE="n1-standard-2"
     MINION_DISK_SIZE="50GB"
     NUM_MINIONS="100"
+    ;;
+
+  # Runs tests on GCE soak cluster.
+  kubernetes-soak-continuous-e2e-gce)
+    : ${E2E_CLUSTER_NAME:="gce-soak-weekly"}
+    : ${E2E_DOWN:="false"}
+    : ${E2E_NETWORK:="gce-soak-weekly"}
+    : ${E2E_UP:="false"}
+    : ${GINKGO_TEST_ARGS:="--ginkgo.skip=$(join_regex_allow_empty \
+          ${GCE_SOAK_CONTINUOUS_SKIP_TESTS[@]:+${GCE_SOAK_CONTINUOUS_SKIP_TESTS[@]}} \
+          )"}
+    : ${KUBE_GCE_INSTANCE_PREFIX:="gce-soak-weekly"}
+    : ${PROJECT:="kubernetes-jenkins"}
     ;;
 
   # Runs a subset of tests on GCE in parallel. Run against all pending PRs.
@@ -249,6 +292,7 @@ case ${JOB_NAME} in
     : ${E2E_NETWORK:="e2e-gce-release"}
     : ${GINKGO_TEST_ARGS:="--ginkgo.skip=$(join_regex_allow_empty \
           ${GCE_DEFAULT_SKIP_TESTS[@]:+${GCE_DEFAULT_SKIP_TESTS[@]}} \
+          ${GCE_RELEASE_SKIP_TESTS[@]:+${GCE_RELEASE_SKIP_TESTS[@]}} \
           ${GCE_FLAKY_TESTS[@]:+${GCE_FLAKY_TESTS[@]}} \
           )"}
     : ${KUBE_GCE_INSTANCE_PREFIX="e2e-gce"}
@@ -274,6 +318,7 @@ export KUBE_GKE_NETWORK=${E2E_NETWORK}
 
 # Shared cluster variables
 export E2E_MIN_STARTUP_PODS=${E2E_MIN_STARTUP_PODS:-}
+export KUBE_ENABLE_CLUSTER_MONITORING=${ENABLE_CLUSTER_MONITORING:-}
 export MASTER_SIZE=${MASTER_SIZE:-}
 export MINION_SIZE=${MINION_SIZE:-}
 export NUM_MINIONS=${NUM_MINIONS:-}

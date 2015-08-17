@@ -6,6 +6,10 @@
 	],
 	"Deps": [
 		{
+			"ImportPath": "bitbucket.org/bertimus9/systemstat",
+			"Rev": "1468fd0db20598383c9393cccaa547de6ad99e5e"
+		},
+		{
 			"ImportPath": "bitbucket.org/ww/goautoneg",
 			"Comment": "null-5",
 			"Rev": "75cd24fc2f2c2a2088577d12123ddee5f54e0675"
@@ -29,8 +33,8 @@
 		},
 		{
 			"ImportPath": "github.com/appc/spec/schema",
-			"Comment": "v0.5.1-55-g87808a3",
-			"Rev": "87808a37061a4a2e6204ccea5fd2fc930576db94"
+			"Comment": "v0.6.1-30-gc928a0c",
+			"Rev": "c928a0c907c96034dfc0a69098b2179db5ae7e37"
 		},
 		{
 			"ImportPath": "github.com/aws/aws-sdk-go/aws",
@@ -484,8 +488,8 @@
 		},
 		{
 			"ImportPath": "github.com/spf13/pflag",
-			"Comment": "v0.0.1-73-g534019b",
-			"Rev": "534019bcaea096fc0f0641afa2aed1e80cbb0ccc"
+			"Comment": "v0.0.1-81-g4869ec2",
+			"Rev": "4869ec2ae0628354eaac5bf88fccf9a7265ae475"
 		},
 		{
 			"ImportPath": "github.com/stretchr/objx",
@@ -546,6 +550,14 @@
 		{
 			"ImportPath": "golang.org/x/oauth2",
 			"Rev": "b5adcc2dcdf009d0391547edc6ecbaff889f5bb9"
+		},
+		{
+			"ImportPath": "golang.org/x/tools/go/ast/astutil",
+			"Rev": "4f50f44d7a3206e9e28b984e023efce2a4a75369"
+		},
+		{
+			"ImportPath": "golang.org/x/tools/imports",
+			"Rev": "4f50f44d7a3206e9e28b984e023efce2a4a75369"
 		},
 		{
 			"ImportPath": "google.golang.org/api/compute/v1",

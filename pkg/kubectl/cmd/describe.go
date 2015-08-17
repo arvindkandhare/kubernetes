@@ -43,24 +43,27 @@ $ kubectl describe TYPE NAME_PREFIX
 will first check for an exact match on TYPE and NAME_PREFIX. If no such resource
 exists, it will output details for every resource that has a name prefixed with NAME_PREFIX
 
-Possible resources include (case insensitive): pods (po), services (svc),
+Possible resource types include (case insensitive): pods (po), services (svc),
 replicationcontrollers (rc), nodes (no), events (ev), limitranges (limits),
 persistentvolumes (pv), persistentvolumeclaims (pvc), resourcequotas (quota),
 namespaces (ns) or secrets.`
-	describe_example = `// Describe a node
+	describe_example = `# Describe a node
 $ kubectl describe nodes kubernetes-minion-emt8.c.myproject.internal
 
-// Describe a pod
+# Describe a pod
 $ kubectl describe pods/nginx
 
-// Describe a pod using the data in pod.json.
+# Describe a pod using the data in pod.json.
 $ kubectl describe -f pod.json
 
-// Describe pods by label name=myLabel
+# Describe all pods
+$ kubectl describe pods
+
+# Describe pods by label name=myLabel
 $ kubectl describe po -l name=myLabel
 
-// Describe all pods managed by the 'frontend' replication controller (rc-created pods
-// get the name of the rc as a prefix in the pod the name).
+# Describe all pods managed by the 'frontend' replication controller (rc-created pods
+# get the name of the rc as a prefix in the pod the name).
 $ kubectl describe pods frontend`
 )
 
@@ -100,7 +103,7 @@ func RunDescribe(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []s
 		NamespaceParam(cmdNamespace).DefaultNamespace().
 		FilenameParam(enforceNamespace, filenames...).
 		SelectorParam(selector).
-		ResourceTypeOrNameArgs(false, args...).
+		ResourceTypeOrNameArgs(true, args...).
 		Flatten().
 		Do()
 	err = r.Err()

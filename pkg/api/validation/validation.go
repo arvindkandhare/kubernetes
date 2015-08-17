@@ -221,9 +221,11 @@ func ValidateObjectMeta(meta *api.ObjectMeta, requiresNamespace bool, nameFn Val
 	}
 	// If the generated name validates, but the calculated value does not, it's a problem with generation, and we
 	// report it here. This may confuse users, but indicates a programming bug and still must be validated.
-	// If there are multiple fields out of which one is required then add a or as a seperator
+	// If there are multiple fields out of which one is required then add a or as a separator
 	if len(meta.Name) == 0 {
-		allErrs = append(allErrs, errs.NewFieldRequired("name or generateName"))
+		requiredErr := errs.NewFieldRequired("name")
+		requiredErr.Detail = "name or generateName is required"
+		allErrs = append(allErrs, requiredErr)
 	} else {
 		if ok, qualifier := nameFn(meta.Name, false); !ok {
 			allErrs = append(allErrs, errs.NewFieldInvalid("name", meta.Name, qualifier))
@@ -678,7 +680,7 @@ func validateEnvVarValueFrom(ev api.EnvVar) errs.ValidationErrorList {
 	return allErrs
 }
 
-var validFieldPathExpressions = util.NewStringSet("metadata.name", "metadata.namespace")
+var validFieldPathExpressions = util.NewStringSet("metadata.name", "metadata.namespace", "status.podIP")
 
 func validateObjectFieldSelector(fs *api.ObjectFieldSelector) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
@@ -1801,4 +1803,27 @@ func ValidateSecurityContext(sc *api.SecurityContext) errs.ValidationErrorList {
 		}
 	}
 	return allErrs
+}
+
+func ValidateThirdPartyResource(obj *api.ThirdPartyResource) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	if len(obj.Name) == 0 {
+		allErrs = append(allErrs, errs.NewFieldInvalid("name", obj.Name, "name must be non-empty"))
+	}
+	versions := util.StringSet{}
+	for ix := range obj.Versions {
+		version := &obj.Versions[ix]
+		if len(version.Name) == 0 {
+			allErrs = append(allErrs, errs.NewFieldInvalid("name", version, "name can not be empty"))
+		}
+		if versions.Has(version.Name) {
+			allErrs = append(allErrs, errs.NewFieldDuplicate("version", version))
+		}
+		versions.Insert(version.Name)
+	}
+	return allErrs
+}
+
+func ValidateSchemaUpdate(oldResource, newResource *api.ThirdPartyResource) errs.ValidationErrorList {
+	return errs.ValidationErrorList{fmt.Errorf("Schema update is not supported.")}
 }

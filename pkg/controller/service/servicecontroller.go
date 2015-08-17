@@ -213,7 +213,7 @@ func (s *ServiceController) processDelta(delta *cache.Delta) (error, bool) {
 		}
 		service = cachedService.lastState
 		delta.Object = cachedService.lastState
-		namespacedName = types.NamespacedName{service.Namespace, service.Name}
+		namespacedName = types.NamespacedName{Namespace: service.Namespace, Name: service.Name}
 	} else {
 		namespacedName.Namespace = service.Namespace
 		namespacedName.Name = service.Name
@@ -242,7 +242,7 @@ func (s *ServiceController) processDelta(delta *cache.Delta) (error, bool) {
 			return err, retry
 		}
 		// Always update the cache upon success.
-		// NOTE: Since we update the cached service if and only if we successully
+		// NOTE: Since we update the cached service if and only if we successfully
 		// processed it, a cached service being nil implies that it hasn't yet
 		// been successfully processed.
 		cachedService.appliedState = service
@@ -659,7 +659,7 @@ func (s *ServiceController) lockedUpdateLoadBalancerHosts(service *api.Service, 
 
 	// It's only an actual error if the load balancer still exists.
 	if _, exists, err := s.balancer.GetTCPLoadBalancer(name, s.zone.Region); err != nil {
-		glog.Errorf("External error while checking if TCP load balancer %q exists: name, %v")
+		glog.Errorf("External error while checking if TCP load balancer %q exists: name, %v", name, err)
 	} else if !exists {
 		return nil
 	}

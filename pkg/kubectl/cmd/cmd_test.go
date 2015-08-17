@@ -83,7 +83,7 @@ func newExternalScheme() (*runtime.Scheme, meta.RESTMapper, runtime.Codec) {
 
 	codec := runtime.CodecFor(scheme, "unlikelyversion")
 	validVersion := testapi.Version()
-	mapper := meta.NewDefaultRESTMapper([]string{"unlikelyversion", validVersion}, func(version string) (*meta.VersionInterfaces, error) {
+	mapper := meta.NewDefaultRESTMapper("apitest", []string{"unlikelyversion", validVersion}, func(version string) (*meta.VersionInterfaces, error) {
 		return &meta.VersionInterfaces{
 			Codec:            runtime.CodecFor(scheme, version),
 			ObjectConvertor:  scheme,
@@ -267,7 +267,7 @@ func ExamplePrintReplicationControllerWithNamespace() {
 			Name:              "foo",
 			Namespace:         "beep",
 			Labels:            map[string]string{"foo": "bar"},
-			CreationTimestamp: util.Time{time.Now().AddDate(-10, 0, 0)},
+			CreationTimestamp: util.Time{Time: time.Now().AddDate(-10, 0, 0)},
 		},
 		Spec: api.ReplicationControllerSpec{
 			Replicas: 1,
@@ -308,7 +308,7 @@ func ExamplePrintPodWithWideFormat() {
 	pod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:              "test1",
-			CreationTimestamp: util.Time{time.Now().AddDate(-10, 0, 0)},
+			CreationTimestamp: util.Time{Time: time.Now().AddDate(-10, 0, 0)},
 		},
 		Spec: api.PodSpec{
 			Containers: make([]api.Container, 2),
@@ -345,7 +345,7 @@ func ExamplePrintServiceWithNamespacesAndLabels() {
 				ObjectMeta: api.ObjectMeta{
 					Name:              "svc1",
 					Namespace:         "ns1",
-					CreationTimestamp: util.Time{time.Now().AddDate(-10, 0, 0)},
+					CreationTimestamp: util.Time{Time: time.Now().AddDate(-10, 0, 0)},
 					Labels: map[string]string{
 						"l1": "value",
 					},
@@ -366,7 +366,7 @@ func ExamplePrintServiceWithNamespacesAndLabels() {
 				ObjectMeta: api.ObjectMeta{
 					Name:              "svc2",
 					Namespace:         "ns2",
-					CreationTimestamp: util.Time{time.Now().AddDate(-10, 0, 0)},
+					CreationTimestamp: util.Time{Time: time.Now().AddDate(-10, 0, 0)},
 					Labels: map[string]string{
 						"l1": "dolla-bill-yall",
 					},
@@ -391,15 +391,13 @@ func ExamplePrintServiceWithNamespacesAndLabels() {
 		fmt.Printf("Unexpected error: %v", err)
 	}
 	// Output:
-	// |NAMESPACE   NAME      LABELS               SELECTOR   IP(S)      PORT(S)    AGE       L1|
-	// |ns1         svc1      l1=value             s=magic    10.1.1.1   53/UDP     10y       value|
-	// |                                                                 53/TCP     |
-	// |ns2         svc2      l1=dolla-bill-yall   s=kazam    10.1.1.2   80/TCP     10y       dolla-bill-yall|
-	// |                                                                 8080/TCP   |
+	// |NAMESPACE   NAME      CLUSTER_IP   EXTERNAL_IP   PORT(S)           SELECTOR   AGE       L1|
+	// |ns1         svc1      10.1.1.1     unknown       53/UDP,53/TCP     s=magic    10y       value|
+	// |ns2         svc2      10.1.1.2     unknown       80/TCP,8080/TCP   s=kazam    10y       dolla-bill-yall|
 	// ||
 }
 
-func TestNormalizationFuncGlobalExistance(t *testing.T) {
+func TestNormalizationFuncGlobalExistence(t *testing.T) {
 	// This test can be safely deleted when we will not support multiple flag formats
 	root := NewKubectlCommand(cmdutil.NewFactory(nil), os.Stdin, os.Stdout, os.Stderr)
 

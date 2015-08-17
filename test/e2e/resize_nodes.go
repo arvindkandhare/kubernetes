@@ -33,7 +33,7 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/kubernetes/pkg/cloudprovider/aws"
+	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 )
 
 const (
@@ -550,7 +550,7 @@ var _ = Describe("Nodes", func() {
 					pod, err := c.Pods(ns).Get(additionalPod)
 					Expect(err).NotTo(HaveOccurred())
 					if pod.Spec.NodeName != node.Name {
-						Logf("Pod %s found on invalid node: %s instead of %s", pod.Spec.NodeName, node.Name)
+						Logf("Pod %s found on invalid node: %s instead of %s", pod.Name, pod.Spec.NodeName, node.Name)
 					}
 				}
 			})

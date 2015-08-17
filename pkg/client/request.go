@@ -600,8 +600,6 @@ func (r *Request) Stream() (io.ReadCloser, error) {
 		bodyText := string(bodyBytes)
 		return nil, fmt.Errorf("%s while accessing %v: %s", resp.Status, url, bodyText)
 	}
-
-	return resp.Body, nil
 }
 
 // Upgrade upgrades the request so that it supports multiplexed bidirectional
@@ -641,7 +639,7 @@ func (r *Request) Upgrade(config *Config, newRoundTripperFunc func(*tls.Config) 
 
 // request connects to the server and invokes the provided function when a server response is
 // received. It handles retry behavior and up front validation of requests. It wil invoke
-// fn at most once. It will return an error if a problem occured prior to connecting to the
+// fn at most once. It will return an error if a problem occurred prior to connecting to the
 // server - the provided function is responsible for handling server errors.
 func (r *Request) request(fn func(*http.Request, *http.Response)) error {
 	if r.err != nil {

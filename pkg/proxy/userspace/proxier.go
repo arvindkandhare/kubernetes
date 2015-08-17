@@ -69,6 +69,7 @@ type Proxier struct {
 	loadBalancer  LoadBalancer
 	mu            sync.Mutex // protects serviceMap
 	serviceMap    map[proxy.ServicePortName]*serviceInfo
+	syncPeriod    time.Duration
 	portMapMutex  sync.Mutex
 	portMap       map[portMapKey]proxy.ServicePortName
 	numProxyLoops int32 // use atomic ops to access this; mostly for testing
@@ -110,7 +111,7 @@ func IsProxyLocked(err error) bool {
 // if iptables fails to update or acquire the initial lock. Once a proxier is
 // created, it will keep iptables up to date in the background and will not
 // terminate if a particular iptables call fails.
-func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, pr util.PortRange) (*Proxier, error) {
+func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, pr util.PortRange, syncPeriod time.Duration) (*Proxier, error) {
 	if listenIP.Equal(localhostIPv4) || listenIP.Equal(localhostIPv6) {
 		return nil, ErrProxyOnLocalhost
 	}
@@ -123,14 +124,16 @@ func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.In
 	proxyPorts := newPortAllocator(pr)
 
 	glog.V(2).Infof("Setting proxy IP to %v and initializing iptables", hostIP)
-	return createProxier(loadBalancer, listenIP, iptables, hostIP, proxyPorts)
+	return createProxier(loadBalancer, listenIP, iptables, hostIP, proxyPorts, syncPeriod)
 }
 
-func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, hostIP net.IP, proxyPorts PortAllocator) (*Proxier, error) {
+func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, hostIP net.IP, proxyPorts PortAllocator, syncPeriod time.Duration) (*Proxier, error) {
 	// convenient to pass nil for tests..
 	if proxyPorts == nil {
 		proxyPorts = newPortAllocator(util.PortRange{})
 	}
+	glog.V(2).Info("Tearing down pure-iptables proxy rules. Errors here are acceptable.")
+	tearDownIptablesProxierRules(iptables)
 	// Set up the iptables foundations we need.
 	if err := iptablesInit(iptables); err != nil {
 		return nil, fmt.Errorf("failed to initialize iptables: %v", err)
@@ -144,6 +147,7 @@ func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables
 		loadBalancer: loadBalancer,
 		serviceMap:   make(map[proxy.ServicePortName]*serviceInfo),
 		portMap:      make(map[portMapKey]proxy.ServicePortName),
+		syncPeriod:   syncPeriod,
 		listenIP:     listenIP,
 		iptables:     iptables,
 		hostIP:       hostIP,
@@ -151,12 +155,22 @@ func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables
 	}, nil
 }
 
-// The periodic interval for checking the state of things.
-const syncInterval = 5 * time.Second
+// remove the iptables rules from the pure iptables Proxier
+func tearDownIptablesProxierRules(ipt iptables.Interface) {
+	//TODO: actually tear down all rules and chains.
+	//NOTE: this needs to be kept in sync with the proxy/iptables Proxier's rules.
+	args := []string{"-j", "KUBE-SERVICES"}
+	if err := ipt.DeleteRule(iptables.TableNAT, iptables.ChainOutput, args...); err != nil {
+		glog.Errorf("Error removing pure-iptables proxy rule: %v", err)
+	}
+	if err := ipt.DeleteRule(iptables.TableNAT, iptables.ChainPrerouting, args...); err != nil {
+		glog.Errorf("Error removing pure-iptables proxy rule: %v", err)
+	}
+}
 
 // SyncLoop runs periodic work.  This is expected to run as a goroutine or as the main loop of the app.  It does not return.
 func (proxier *Proxier) SyncLoop() {
-	t := time.NewTicker(syncInterval)
+	t := time.NewTicker(proxier.syncPeriod)
 	defer t.Stop()
 	for {
 		<-t.C
@@ -244,7 +258,7 @@ func (proxier *Proxier) addServiceOnPort(service proxy.ServicePortName, protocol
 		socket:              sock,
 		timeout:             timeout,
 		sessionAffinityType: api.ServiceAffinityNone, // default
-		stickyMaxAgeMinutes: 180,                     // TODO: paramaterize this in the API.
+		stickyMaxAgeMinutes: 180,                     // TODO: parameterize this in the API.
 	}
 	proxier.setServiceInfo(service, si)
 
@@ -265,7 +279,7 @@ const udpIdleTimeout = 1 * time.Second
 // OnUpdate manages the active set of service proxies.
 // Active service proxies are reinitialized if found in the update set or
 // shutdown if missing from the update set.
-func (proxier *Proxier) OnUpdate(services []api.Service) {
+func (proxier *Proxier) OnServiceUpdate(services []api.Service) {
 	glog.V(4).Infof("Received update notice: %+v", services)
 	activeServices := make(map[proxy.ServicePortName]bool) // use a map as a set
 	for i := range services {
@@ -273,14 +287,13 @@ func (proxier *Proxier) OnUpdate(services []api.Service) {
 
 		// if ClusterIP is "None" or empty, skip proxying
 		if !api.IsServiceIPSet(service) {
-			glog.V(3).Infof("Skipping service %s due to clusterIP = %q", types.NamespacedName{service.Namespace, service.Name}, service.Spec.ClusterIP)
+			glog.V(3).Infof("Skipping service %s due to clusterIP = %q", types.NamespacedName{Namespace: service.Namespace, Name: service.Name}, service.Spec.ClusterIP)
 			continue
 		}
 
 		for i := range service.Spec.Ports {
 			servicePort := &service.Spec.Ports[i]
-
-			serviceName := proxy.ServicePortName{types.NamespacedName{service.Namespace, service.Name}, servicePort.Name}
+			serviceName := proxy.ServicePortName{NamespacedName: types.NamespacedName{Namespace: service.Namespace, Name: service.Name}, Port: servicePort.Name}
 			activeServices[serviceName] = true
 			serviceIP := net.ParseIP(service.Spec.ClusterIP)
 			info, exists := proxier.getServiceInfo(serviceName)
@@ -582,7 +595,7 @@ var iptablesHostNodePortChain iptables.Chain = "KUBE-NODEPORT-HOST"
 // Ensure that the iptables infrastructure we use is set up.  This can safely be called periodically.
 func iptablesInit(ipt iptables.Interface) error {
 	// TODO: There is almost certainly room for optimization here.  E.g. If
-	// we knew the service_cluster_ip_range CIDR we could fast-track outbound packets not
+	// we knew the service-cluster-ip-range CIDR we could fast-track outbound packets not
 	// destined for a service. There's probably more, help wanted.
 
 	// Danger - order of these rules matters here:
@@ -602,7 +615,7 @@ func iptablesInit(ipt iptables.Interface) error {
 	// the NodePort would take priority (incorrectly).
 	// This is unlikely (and would only affect outgoing traffic from the cluster to the load balancer, which seems
 	// doubly-unlikely), but we need to be careful to keep the rules in the right order.
-	args := []string{ /* service_cluster_ip_range matching could go here */ }
+	args := []string{ /* service-cluster-ip-range matching could go here */ }
 	args = append(args, "-m", "comment", "--comment", "handle ClusterIPs; NOTE: this must be before the NodePort rules")
 	if _, err := ipt.EnsureChain(iptables.TableNAT, iptablesContainerPortalChain); err != nil {
 		return err

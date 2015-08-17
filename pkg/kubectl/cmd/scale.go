@@ -36,13 +36,13 @@ Scale also allows users to specify one or more preconditions for the scale actio
 If --current-replicas or --resource-version is specified, it is validated before the
 scale is attempted, and it is guaranteed that the precondition holds true when the
 scale is sent to the server.`
-	scale_example = `// Scale replication controller named 'foo' to 3.
+	scale_example = `# Scale replication controller named 'foo' to 3.
 $ kubectl scale --replicas=3 replicationcontrollers foo
 
-// If the replication controller named foo's current size is 2, scale foo to 3.
+# If the replication controller named foo's current size is 2, scale foo to 3.
 $ kubectl scale --current-replicas=2 --replicas=3 replicationcontrollers foo
 
-// Scale multiple replication controllers.
+# Scale multiple replication controllers.
 $ kubectl scale --replicas=5 rc/foo rc/bar`
 )
 
@@ -121,7 +121,7 @@ func RunScale(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []stri
 	if currentSize != -1 && len(infos) > 1 {
 		return fmt.Errorf("cannot use --current-replicas with multiple controllers")
 	}
-	precondition := &kubectl.ScalePrecondition{currentSize, resourceVersion}
+	precondition := &kubectl.ScalePrecondition{Size: currentSize, ResourceVersion: resourceVersion}
 	retry := kubectl.NewRetryParams(kubectl.Interval, kubectl.Timeout)
 	var waitForReplicas *kubectl.RetryParams
 	if timeout := cmdutil.GetFlagDuration(cmd, "timeout"); timeout != 0 {

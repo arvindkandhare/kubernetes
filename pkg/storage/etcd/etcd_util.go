@@ -34,7 +34,7 @@ func IsEtcdNotFound(err error) bool {
 	return isEtcdErrorNum(err, tools.EtcdErrorCodeNotFound)
 }
 
-// IsEtcdNodeExist returns true iff err is an etcd node aleady exist error.
+// IsEtcdNodeExist returns true iff err is an etcd node already exist error.
 func IsEtcdNodeExist(err error) bool {
 	return isEtcdErrorNum(err, tools.EtcdErrorCodeNodeExist)
 }
@@ -107,7 +107,7 @@ func NewEtcdClientStartServerIfNecessary(server string) (tools.EtcdClient, error
 
 type etcdHealth struct {
 	// Note this has to be public so the json library can modify it.
-	Health string `json:health`
+	Health string `json:"health"`
 }
 
 func EtcdHealthCheck(data []byte) error {

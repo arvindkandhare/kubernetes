@@ -224,7 +224,7 @@ type PersistentVolumeSource struct {
 	// HostPath represents a directory on the host.
 	// This is useful for development and testing only.
 	// on-host storage is not supported in any way.
-	HostPath *HostPathVolumeSource `json:"hostPath,omitempty" description:"a HostPath provisioned by a developer or tester; for develment use only; see http://releases.k8s.io/HEAD/docs/user-guide/volumes.md#hostpath"`
+	HostPath *HostPathVolumeSource `json:"hostPath,omitempty" description:"a HostPath provisioned by a developer or tester; for development use only; see http://releases.k8s.io/HEAD/docs/user-guide/volumes.md#hostpath"`
 	// Glusterfs represents a Glusterfs volume that is attached to a host and exposed to the pod
 	Glusterfs *GlusterfsVolumeSource `json:"glusterfs,omitempty" description:"Glusterfs volume resource provisioned by an admin; see http://releases.k8s.io/HEAD/examples/glusterfs/README.md"`
 	// NFS represents an NFS mount on the host
@@ -609,7 +609,7 @@ const (
 // TCPSocketAction describes an action based on opening a socket
 type TCPSocketAction struct {
 	// Required: Port to connect to.
-	Port util.IntOrString `json:"port" description:"number of name of the port to access on the container; number must be in the range 1 to 65535; name must be an IANA_SVC_NAME"`
+	Port util.IntOrString `json:"port" description:"number or name of the port to access on the container; number must be in the range 1 to 65535; name must be an IANA_SVC_NAME"`
 }
 
 // ExecAction describes a "run in container" action.
@@ -873,7 +873,7 @@ type PodSpec struct {
 	// a termination signal and the time when the processes are forcibly halted with a kill signal.
 	// Set this value longer than the expected cleanup time for your process.
 	TerminationGracePeriodSeconds *int64 `json:"terminationGracePeriodSeconds,omitempty" description:"optional duration in seconds the pod needs to terminate gracefully; may be decreased in delete request; value must be non-negative integer; the value zero indicates delete immediately; if this value is not set, the default grace period will be used instead; the grace period is the duration in seconds after the processes running in the pod are sent a termination signal and the time when the processes are forcibly halted with a kill signal; set this value longer than the expected cleanup time for your process"`
-	ActiveDeadlineSeconds         *int64 `json:"activeDeadlineSeconds,omitempty" description:"optional duration in seconds the pod may be active on the node relative to StartTime before the system will actively try to mark it failed and kill associated containers; value must be a positive integer`
+	ActiveDeadlineSeconds         *int64 `json:"activeDeadlineSeconds,omitempty" description:"optional duration in seconds the pod may be active on the node relative to StartTime before the system will actively try to mark it failed and kill associated containers; value must be a positive integer"`
 	// Optional: Set DNS policy.  Defaults to "ClusterFirst"
 	DNSPolicy DNSPolicy `json:"dnsPolicy,omitempty" description:"DNS policy for containers within the pod; one of 'ClusterFirst' or 'Default'"`
 	// NodeSelector is a selector which must be true for the pod to fit on a node
@@ -1715,7 +1715,7 @@ type StatusCause struct {
 }
 
 // CauseType is a machine readable value providing more detail about what
-// occured in a status response. An operation may have multiple causes for a
+// occurred in a status response. An operation may have multiple causes for a
 // status (whether Failure or Success).
 type CauseType string
 
@@ -1799,8 +1799,8 @@ type Event struct {
 	// The time at which the event was first recorded. (Time of server receipt is in TypeMeta.)
 	FirstTimestamp util.Time `json:"firstTimestamp,omitempty" description:"the time at which the event was first recorded"`
 
-	// The time at which the most recent occurance of this event was recorded.
-	LastTimestamp util.Time `json:"lastTimestamp,omitempty" description:"the time at which the most recent occurance of this event was recorded"`
+	// The time at which the most recent occurrence of this event was recorded.
+	LastTimestamp util.Time `json:"lastTimestamp,omitempty" description:"the time at which the most recent occurrence of this event was recorded"`
 
 	// The number of times this event has occurred.
 	Count int `json:"count,omitempty" description:"the number of times this event has occurred"`
@@ -2030,6 +2030,11 @@ type SecurityContext struct {
 
 	// RunAsUser is the UID to run the entrypoint of the container process.
 	RunAsUser *int64 `json:"runAsUser,omitempty" description:"the user id that runs the first process in the container; see http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"`
+
+	// RunAsNonRoot indicates that the container should be run as a non-root user.  If the RunAsUser
+	// field is not explicitly set then the kubelet may check the image for a specified user or
+	// perform defaulting to specify a user.
+	RunAsNonRoot bool `json:"runAsNonRoot,omitempty" description:"indicates the container must be run as a non-root user either by specifying the runAsUser or in the image specification"`
 }
 
 // SELinuxOptions are the labels to be applied to the container
@@ -2054,4 +2059,36 @@ type RangeAllocation struct {
 
 	Range string `json:"range" description:"a range string that identifies the range represented by 'data'; required"`
 	Data  []byte `json:"data" description:"a bit array containing all allocated addresses in the previous segment"`
+}
+
+// A ThirdPartyResource is a generic representation of a resource, it is used by add-ons and plugins to add new resource
+// types to the API.  It consists of one or more Versions of the api.
+type ThirdPartyResource struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+
+	Description string `json:"description,omitempty" description:"The description of this object"`
+
+	Versions []APIVersion `json:"versions,omitempty" description:"The versions for this third party object"`
+}
+
+type ThirdPartyResourceList struct {
+	TypeMeta `json:",inline"`
+	ListMeta `json:"metadata,omitempty" description:"standard list metadata; see http://docs.k8s.io/api-conventions.md#metadata"`
+
+	Items []ThirdPartyResource `json:"items" description:"items is a list of schema objects"`
+}
+
+// An APIVersion represents a single concrete version of an object model.
+type APIVersion struct {
+	Name     string `json:"name,omitempty" description:"name of this version (e.g. 'v1')"`
+	APIGroup string `json:"apiGroup,omitempty" description:"The API group to add this object into, default 'experimental'"`
+}
+
+// An internal object, used for versioned storage in etcd.  Not exposed to the end user.
+type ThirdPartyResourceData struct {
+	TypeMeta   `json:",inline"`
+	ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+
+	Data []byte `json:"name,omitempty" description:"the raw JSON data for this data"`
 }

@@ -51,7 +51,7 @@ Below, we outline one of the more common git workflows that core developers use.
 
 ### Fork the main repository
 
-1. Go to https://github.com/GoogleCloudPlatform/kubernetes
+1. Go to https://github.com/kubernetes/kubernetes
 2. Click the "Fork" button (at the top right)
 
 ### Clone your fork
@@ -64,7 +64,7 @@ cd $GOPATH/src/k8s.io
 # Replace "$YOUR_GITHUB_USERNAME" below with your github username
 git clone https://github.com/$YOUR_GITHUB_USERNAME/kubernetes.git
 cd kubernetes
-git remote add upstream 'https://github.com/GoogleCloudPlatform/kubernetes.git'
+git remote add upstream 'https://github.com/kubernetes/kubernetes.git'
 ```
 
 ### Create a branch and make changes
@@ -81,13 +81,13 @@ git fetch upstream
 git rebase upstream/master
 ```
 
-Note: If you have write access to the main repository at github.com/GoogleCloudPlatform/kubernetes, you should modify your git configuration so that you can't accidentally push to upstream:
+Note: If you have write access to the main repository at github.com/kubernetes/kubernetes, you should modify your git configuration so that you can't accidentally push to upstream:
 
 ```sh
 git remote set-url --push upstream no_push
 ```
 
-### Commiting changes to your fork
+### Committing changes to your fork
 
 ```sh
 git commit
@@ -166,7 +166,7 @@ export GOPATH=$KPATH
 3) Populate your new GOPATH.
 
 ```sh
-cd $KPATH/src/github.com/GoogleCloudPlatform/kubernetes
+cd $KPATH/src/github.com/kubernetes/kubernetes
 godep restore
 ```
 
@@ -345,7 +345,7 @@ See [conformance-test.sh](http://releases.k8s.io/HEAD/hack/conformance-test.sh).
 ## Regenerating the CLI documentation
 
 ```sh
-hack/run-gendocs.sh
+hack/update-generated-docs.sh
 ```
 
 

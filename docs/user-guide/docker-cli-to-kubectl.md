@@ -74,8 +74,6 @@ CONTROLLER   CONTAINER(S)   IMAGE(S)   SELECTOR        REPLICAS
 nginx-app    nginx-app      nginx      run=nginx-app   1
 # expose a port through with a service
 $ kubectl expose rc nginx-app --port=80 --name=nginx-http
-NAME         LABELS          SELECTOR        IP(S)     PORT(S)
-nginx-http   run=nginx-app   run=nginx-app             80/TCP
 ```
 
 With kubectl, we create a [replication controller](replication-controller.md) which will make sure that N pods are running nginx (where N is the number of replicas stated in the spec, which defaults to 1). We also create a [service](services.md) with a selector that matches the replication controller's selector. See the [Quick start](quick-start.md) for more information.
@@ -214,7 +212,7 @@ $ kubectl logs -f nginx-app-zibvs
 
 ```
 
-Now's a good time to mention slight difference between pods and containers; by default pods will not terminate if their processes exit. Instead it will restart the process. This is similar to the docker run option `--restart=always` with one major difference. In docker, the output for each invocation of the process is concatenated but for Kubernetes, each invokation is separate. To see the output from a prevoius run in Kubernetes, do this:
+Now's a good time to mention slight difference between pods and containers; by default pods will not terminate if their processes exit. Instead it will restart the process. This is similar to the docker run option `--restart=always` with one major difference. In docker, the output for each invocation of the process is concatenated but for Kubernetes, each invocation is separate. To see the output from a previous run in Kubernetes, do this:
 
 ```console
 

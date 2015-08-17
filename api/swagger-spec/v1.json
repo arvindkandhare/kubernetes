@@ -1239,6 +1239,14 @@
         "allowMultiple": false
        },
        {
+        "type": "v1.DeleteOptions",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
+        "allowMultiple": false
+       },
+       {
         "type": "string",
         "paramType": "path",
         "name": "namespace",
@@ -1852,6 +1860,14 @@
         "name": "pretty",
         "description": "If 'true', then the output is pretty printed.",
         "required": false,
+        "allowMultiple": false
+       },
+       {
+        "type": "v1.DeleteOptions",
+        "paramType": "body",
+        "name": "body",
+        "description": "",
+        "required": true,
         "allowMultiple": false
        },
        {
@@ -11429,7 +11445,7 @@
      },
      "lastTimestamp": {
       "type": "string",
-      "description": "the time at which the most recent occurance of this event was recorded"
+      "description": "the time at which the most recent occurrence of this event was recorded"
      },
      "count": {
       "type": "integer",
@@ -11985,7 +12001,7 @@
      },
      "hostPath": {
       "$ref": "v1.HostPathVolumeSource",
-      "description": "a HostPath provisioned by a developer or tester; for develment use only; see http://releases.k8s.io/HEAD/docs/user-guide/volumes.md#hostpath"
+      "description": "a HostPath provisioned by a developer or tester; for development use only; see http://releases.k8s.io/HEAD/docs/user-guide/volumes.md#hostpath"
      },
      "glusterfs": {
       "$ref": "v1.GlusterfsVolumeSource",
@@ -12315,7 +12331,8 @@
      },
      "activeDeadlineSeconds": {
       "type": "integer",
-      "format": "int64"
+      "format": "int64",
+      "description": "optional duration in seconds the pod may be active on the node relative to StartTime before the system will actively try to mark it failed and kill associated containers; value must be a positive integer"
      },
      "dnsPolicy": {
       "type": "string",
@@ -12721,7 +12738,7 @@
     "properties": {
      "port": {
       "type": "string",
-      "description": "number of name of the port to access on the container; number must be in the range 1 to 65535; name must be an IANA_SVC_NAME"
+      "description": "number or name of the port to access on the container; number must be in the range 1 to 65535; name must be an IANA_SVC_NAME"
      }
     }
    },
@@ -12774,6 +12791,10 @@
       "type": "integer",
       "format": "int64",
       "description": "the user id that runs the first process in the container; see http://releases.k8s.io/HEAD/docs/design/security_context.md#security-context"
+     },
+     "runAsNonRoot": {
+      "type": "boolean",
+      "description": "indicates the container must be run as a non-root user either by specifying the runAsUser or in the image specification"
      }
     }
    },

@@ -190,7 +190,7 @@ func RCFromManifest(fileName string) *api.ReplicationController {
 
 // StopRC stops the rc via kubectl's stop library
 func StopRC(rc *api.ReplicationController, restClient *client.Client) error {
-	reaper, err := kubectl.ReaperFor("ReplicationController", restClient)
+	reaper, err := kubectl.ReaperFor("ReplicationController", restClient, nil)
 	if err != nil || reaper == nil {
 		return err
 	}
@@ -207,8 +207,8 @@ func ScaleRC(name, ns string, replicas int, restClient *client.Client) (*api.Rep
 	if err != nil {
 		return nil, err
 	}
-	retry := &kubectl.RetryParams{50 * time.Millisecond, DefaultTimeout}
-	waitForReplicas := &kubectl.RetryParams{50 * time.Millisecond, DefaultTimeout}
+	retry := &kubectl.RetryParams{Interval: 50 * time.Millisecond, Timeout: DefaultTimeout}
+	waitForReplicas := &kubectl.RetryParams{Interval: 50 * time.Millisecond, Timeout: DefaultTimeout}
 	err = scaler.Scale(ns, name, uint(replicas), nil, retry, waitForReplicas)
 	if err != nil {
 		return nil, err

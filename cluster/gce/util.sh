@@ -22,7 +22,7 @@ KUBE_ROOT=$(dirname "${BASH_SOURCE}")/../..
 source "${KUBE_ROOT}/cluster/gce/${KUBE_CONFIG_FILE-"config-default.sh"}"
 source "${KUBE_ROOT}/cluster/common.sh"
 
-if [[ "${OS_DISTRIBUTION}" == "debian" || "${OS_DISTRIBUTION}" == "coreos" ]]; then
+if [[ "${OS_DISTRIBUTION}" == "debian" || "${OS_DISTRIBUTION}" == "coreos" || "${OS_DISTRIBUTION}" == "trusty" ]]; then
   source "${KUBE_ROOT}/cluster/gce/${OS_DISTRIBUTION}/helper.sh"
 else
   echo "Cannot operate on cluster using os distro: ${OS_DISTRIBUTION}" >&2
@@ -398,6 +398,10 @@ function create-node-template {
   fi
 
   local attempt=1
+  local preemptible_minions=""
+  if [[ "${PREEMPTIBLE_MINION}" == "true" ]]; then
+    preemptible_minions="--preemptible --maintenance-policy TERMINATE"
+  fi
   while true; do
     echo "Attempt ${attempt} to create ${1}" >&2
     if ! gcloud compute instance-templates create "$1" \
@@ -409,6 +413,7 @@ function create-node-template {
       --image "${MINION_IMAGE}" \
       --tags "${MINION_TAG}" \
       --network "${NETWORK}" \
+      ${preemptible_minions} \
       $2 \
       --can-ip-forward \
       --metadata-from-file "$3","$4" >&2; then
@@ -425,7 +430,7 @@ function create-node-template {
 }
 
 # Robustly try to add metadata on an instance.
-# $1: The name of the instace.
+# $1: The name of the instance.
 # $2...$n: The metadata key=value pairs to add.
 function add-instance-metadata {
   local -r instance=$1
@@ -1027,10 +1032,11 @@ function prepare-push() {
     # being used, create a temp one, then delete the old one and recreate it once again.
     create-node-instance-template "tmp"
 
-    gcloud compute instance-groups managed --zone "${ZONE}" \
-      set-template "${NODE_INSTANCE_PREFIX}-group" \
-      --project "${PROJECT}" \
-      --template "${NODE_INSTANCE_PREFIX}-template-tmp" || true;
+    gcloud compute instance-groups managed \
+      set-instance-template "${NODE_INSTANCE_PREFIX}-group" \
+      --template "${NODE_INSTANCE_PREFIX}-template-tmp" \
+      --zone "${ZONE}" \
+      --project "${PROJECT}" || true;
 
     gcloud compute instance-templates delete \
       --project "${PROJECT}" \
@@ -1039,10 +1045,11 @@ function prepare-push() {
 
     create-node-instance-template
 
-    gcloud compute instance-groups managed --zone "${ZONE}" \
-      set-template "${NODE_INSTANCE_PREFIX}-group" \
-      --project "${PROJECT}" \
-      --template "${NODE_INSTANCE_PREFIX}-template" || true;
+    gcloud compute instance-groups managed \
+      set-instance-template "${NODE_INSTANCE_PREFIX}-group" \
+      --template "${NODE_INSTANCE_PREFIX}-template" \
+      --zone "${ZONE}" \
+      --project "${PROJECT}" || true;
 
     gcloud compute instance-templates delete \
       --project "${PROJECT}" \
@@ -1189,7 +1196,11 @@ function ssh-to-node {
 
 # Restart the kube-proxy on a node ($1)
 function restart-kube-proxy {
-  ssh-to-node "$1" "sudo /etc/init.d/kube-proxy restart"
+  if [[ "${OS_DISTRIBUTION}" == "trusty" ]]; then
+    ssh-to-node "$1" "sudo initctl restart kube-proxy"
+  else
+    ssh-to-node "$1" "sudo /etc/init.d/kube-proxy restart"
+  fi
 }
 
 # Restart the kube-apiserver on a node ($1)

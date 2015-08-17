@@ -27,3 +27,86 @@ support is experimental.
 */
 
 package expapi
+
+import (
+	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/resource"
+)
+
+// ScaleSpec describes the attributes a Scale subresource
+type ScaleSpec struct {
+	// Replicas is the number of desired replicas.
+	Replicas int `json:"replicas,omitempty" description:"number of replicas desired;  http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller"`
+}
+
+// ScaleStatus represents the current status of a Scale subresource.
+type ScaleStatus struct {
+	// Replicas is the number of actual replicas.
+	Replicas int `json:"replicas" description:"most recently oberved number of replicas; see http://releases.k8s.io/HEAD/docs/user-guide/replication-controller.md#what-is-a-replication-controller"`
+
+	// Selector is a label query over pods that should match the replicas count.
+	Selector map[string]string `json:"selector,omitempty" description:"label keys and values that must match in order to be controlled by this replication controller, if empty defaulted to labels on Pod template; see http://releases.k8s.io/HEAD/docs/user-guide/labels.md#label-selectors"`
+}
+
+// Scale subresource, applicable to ReplicationControllers and (in future) Deployment.
+type Scale struct {
+	api.TypeMeta   `json:",inline"`
+	api.ObjectMeta `json:"metadata,omitempty" description:"standard object metadata; see http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#metadata"`
+
+	// Spec defines the behavior of the scale.
+	Spec ScaleSpec `json:"spec,omitempty" description:"specification of the desired behavior of the scale; http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#spec-and-status"`
+
+	// Status represents the current status of the scale.
+	Status ScaleStatus `json:"status,omitempty" description:"most recently observed status of the service; populated by the system, read-only; http://releases.k8s.io/HEAD/docs/devel/api-conventions.md#spec-and-status"`
+}
+
+// Dummy definition
+type ReplicationControllerDummy struct {
+	api.TypeMeta `json:",inline"`
+}
+
+// SubresourceReference contains enough information to let you inspect or modify the referred subresource.
+type SubresourceReference struct {
+	Kind        string `json:"kind,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
+	Name        string `json:"name,omitempty"`
+	APIVersion  string `json:"apiVersion,omitempty"`
+	Subresource string `json:"subresource,omitempty"`
+}
+
+// TargetConsumption is an object for specifying target average resource consumption of a particular resource.
+type TargetConsumption struct {
+	Resource api.ResourceName  `json:"resource,omitempty"`
+	Quantity resource.Quantity `json:"quantity,omitempty"`
+}
+
+// HorizontalPodAutoscalerSpec is the specification of a horizontal pod autoscaler.
+type HorizontalPodAutoscalerSpec struct {
+	// ScaleRef is a reference to Scale subresource. HorizontalPodAutoscaler will learn the current resource consumption from its status,
+	// and will set the desired number of pods by modyfying its spec.
+	ScaleRef *SubresourceReference `json:"scaleRef"`
+	// MinCount is the lower limit for the number of pods that can be set by the autoscaler.
+	MinCount int `json:"minCount"`
+	// MaxCount is the upper limit for the number of pods that can be set by the autoscaler. It cannot be smaller than MinCount.
+	MaxCount int `json:"maxCount"`
+	// Target is the target average consumption of the given resource that the autoscaler will try to maintain by adjusting the desired number of pods.
+	// Currently two types of resources are supported: "cpu" and "memory".
+	Target TargetConsumption `json:"target"`
+}
+
+// HorizontalPodAutoscaler represents the configuration of a horizontal pod autoscaler.
+type HorizontalPodAutoscaler struct {
+	api.TypeMeta   `json:",inline"`
+	api.ObjectMeta `json:"metadata,omitempty"`
+
+	// Spec defines the behaviour of autoscaler.
+	Spec HorizontalPodAutoscalerSpec `json:"spec,omitempty"`
+}
+
+// HorizontalPodAutoscaler is a collection of pod autoscalers.
+type HorizontalPodAutoscalerList struct {
+	api.TypeMeta `json:",inline"`
+	api.ListMeta `json:"metadata,omitempty"`
+
+	Items []HorizontalPodAutoscaler `json:"items"`
+}

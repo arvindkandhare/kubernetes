@@ -657,7 +657,7 @@ This pod mounts several node file system directories using the  `hostPath` volum
   authenticate external services, such as a cloud provider.
   - This is not required if you do not use a cloud provider (e.g. bare-metal).
 - The `/srv/kubernetes` mount allows the apiserver to read certs and credentials stored on the
-  node disk.  These could instead be stored on a persistend disk, such as a GCE PD, or baked into the image.
+  node disk.  These could instead be stored on a persistent disk, such as a GCE PD, or baked into the image.
 - Optionally, you may want to mount `/var/log` as well and redirect output there (not shown in template).
   - Do this if you prefer your logs to be accessible from the root filesystem with tools like journalctl.
 
@@ -669,7 +669,7 @@ Apiserver supports several cloud providers.
 
 - options for `--cloud-provider` flag are `aws`, `gce`, `mesos`, `openshift`, `ovirt`, `rackspace`, `vagrant`, or unset.
 - unset used for e.g. bare metal setups.
-- support for new IaaS is added by contributing code [here](../../pkg/cloudprovider/)
+- support for new IaaS is added by contributing code [here](../../pkg/cloudprovider/providers/)
 
 Some cloud providers require a config file. If so, you need to put config file into apiserver image or mount through hostPath.
 
@@ -677,7 +677,7 @@ Some cloud providers require a config file. If so, you need to put config file i
 - Used by `aws`, `gce`, `mesos`, `openshift`, `ovirt` and `rackspace`.
 - You must put config file into apiserver image or mount through hostPath.
 - Cloud config file syntax is [Gcfg](https://code.google.com/p/gcfg/).
-- AWS format defined by type [AWSCloudConfig](../../pkg/cloudprovider/aws/aws.go)
+- AWS format defined by type [AWSCloudConfig](../../pkg/cloudprovider/providers/aws/aws.go)
 - There is a similar type in the corresponding file for other cloud providers.
 - GCE example: search for `gce.conf` in [this file](../../cluster/gce/configure-vm.sh)
 

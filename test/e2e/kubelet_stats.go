@@ -43,7 +43,7 @@ import (
 )
 
 // KubeletMetric stores metrics scraped from the kubelet server's /metric endpoint.
-// TODO: Get some more structure aroud the metrics and this type
+// TODO: Get some more structure around the metrics and this type
 type KubeletMetric struct {
 	// eg: list, info, create
 	Operation string
@@ -193,6 +193,10 @@ type containerResourceUsage struct {
 	MemoryWorkingSetInBytes int64
 	// The interval used to calculate CPUUsageInCores.
 	CPUInterval time.Duration
+}
+
+func (r *containerResourceUsage) isStrictlyGreaterThan(rhs *containerResourceUsage) bool {
+	return r.CPUUsageInCores > rhs.CPUUsageInCores && r.MemoryUsageInBytes > rhs.MemoryUsageInBytes && r.MemoryWorkingSetInBytes > rhs.MemoryWorkingSetInBytes
 }
 
 // getOneTimeResourceUsageOnNode queries the node's /stats/container endpoint

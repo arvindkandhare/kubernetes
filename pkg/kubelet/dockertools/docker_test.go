@@ -269,7 +269,7 @@ func TestPullWithJSONError(t *testing.T) {
 		}
 		err := puller.Pull(test.imageName, []api.Secret{})
 		if err == nil || !strings.Contains(err.Error(), test.expectedError) {
-			t.Errorf("%d: expect error %s, got : %s", i, test.expectedError, err)
+			t.Errorf("%s: expect error %s, got : %s", i, test.expectedError, err)
 			continue
 		}
 	}
@@ -656,7 +656,7 @@ func TestFindContainersByPod(t *testing.T) {
 	}
 	fakeClient := &FakeDockerClient{}
 	np, _ := network.InitNetworkPlugin([]network.NetworkPlugin{}, "", network.NewFakeHost(nil))
-	containerManager := NewFakeDockerManager(fakeClient, &record.FakeRecorder{}, nil, nil, &cadvisorApi.MachineInfo{}, PodInfraContainerImage, 0, 0, "", kubecontainer.FakeOS{}, np, nil, nil, nil)
+	containerManager := NewFakeDockerManager(fakeClient, &record.FakeRecorder{}, nil, nil, &cadvisorApi.MachineInfo{}, PodInfraContainerImage, 0, 0, "", kubecontainer.FakeOS{}, np, nil, nil)
 	for i, test := range tests {
 		fakeClient.ContainerList = test.containerList
 		fakeClient.ExitedContainerList = test.exitedContainerList

@@ -125,6 +125,10 @@ type TestContextType struct {
 
 var testContext TestContextType
 
+func SetTestContext(t TestContextType) {
+	testContext = t
+}
+
 type ContainerFailures struct {
 	status   *api.ContainerStateTerminated
 	restarts int
@@ -174,7 +178,9 @@ type RCConfig struct {
 	Timeout       time.Duration
 	PodStatusFile *os.File
 	Replicas      int
+	CpuRequest    int64 // millicores
 	CpuLimit      int64 // millicores
+	MemRequest    int64 // bytes
 	MemLimit      int64 // bytes
 
 	// Env vars, set the same for every pod.
@@ -195,16 +201,20 @@ type RCConfig struct {
 	MaxContainerFailures *int
 }
 
+func nowStamp() string {
+	return time.Now().Format(time.StampMilli)
+}
+
 func Logf(format string, a ...interface{}) {
-	fmt.Fprintf(GinkgoWriter, "INFO: "+format+"\n", a...)
+	fmt.Fprintf(GinkgoWriter, nowStamp()+": INFO: "+format+"\n", a...)
 }
 
 func Failf(format string, a ...interface{}) {
-	Fail(fmt.Sprintf(format, a...), 1)
+	Fail(nowStamp()+": "+fmt.Sprintf(format, a...), 1)
 }
 
 func Skipf(format string, args ...interface{}) {
-	Skip(fmt.Sprintf(format, args...))
+	Skip(nowStamp() + ": " + fmt.Sprintf(format, args...))
 }
 
 func SkipUnlessNodeCountIsAtLeast(minNodeCount int) {
@@ -497,7 +507,7 @@ func deleteTestingNS(c *client.Client) error {
 		for _, ns := range namespaces.Items {
 			if strings.HasPrefix(ns.ObjectMeta.Name, "e2e-tests-") {
 				if ns.Status.Phase == api.NamespaceActive {
-					return fmt.Errorf("Namespace %s is active", ns)
+					return fmt.Errorf("Namespace %s is active", ns.ObjectMeta.Name)
 				}
 				terminating++
 			}
@@ -507,6 +517,51 @@ func deleteTestingNS(c *client.Client) error {
 		}
 	}
 	return fmt.Errorf("Waiting for terminating namespaces to be deleted timed out")
+}
+
+// deleteNS deletes the provided namespace, waits for it to be completely deleted, and then checks
+// whether there are any pods remaining in a non-terminating state.
+func deleteNS(c *client.Client, namespace string) error {
+	if err := c.Namespaces().Delete(namespace); err != nil {
+		return err
+	}
+
+	err := wait.Poll(1*time.Second, 2*time.Minute, func() (bool, error) {
+		if _, err := c.Namespaces().Get(namespace); err != nil {
+			if apierrs.IsNotFound(err) {
+				return true, nil
+			}
+			Logf("Error while waiting for namespace to be terminated: %v", err)
+			return false, nil
+		}
+		return false, nil
+	})
+
+	// check for pods that were not deleted
+	remaining := []string{}
+	missingTimestamp := false
+	if pods, perr := c.Pods(namespace).List(labels.Everything(), fields.Everything()); perr == nil {
+		for _, pod := range pods.Items {
+			Logf("Pod %s %s on node %s remains, has deletion timestamp %s", namespace, pod.Name, pod.Spec.NodeName, pod.DeletionTimestamp)
+			remaining = append(remaining, pod.Name)
+			if pod.DeletionTimestamp == nil {
+				missingTimestamp = true
+			}
+		}
+	}
+
+	// a timeout occured
+	if err != nil {
+		if missingTimestamp {
+			return fmt.Errorf("namespace %s was not deleted within limit: %v, some pods were not marked with a deletion timestamp, pods remaining: %v", namespace, err, remaining)
+		}
+		return fmt.Errorf("namespace %s was not deleted within limit: %v, pods remaining: %v", namespace, err, remaining)
+	}
+	// pods were not deleted but the namespace was deleted
+	if len(remaining) > 0 {
+		return fmt.Errorf("pods remained within namespace %s after deletion: %v", namespace, remaining)
+	}
+	return nil
 }
 
 func waitForPodRunningInNamespace(c *client.Client, podName string, namespace string) error {
@@ -545,18 +600,16 @@ func waitForPodSuccessInNamespace(c *client.Client, podName string, contName str
 				if ci.State.Terminated.ExitCode == 0 {
 					By("Saw pod success")
 					return true, nil
-				} else {
-					return true, fmt.Errorf("pod '%s' terminated with failure: %+v", podName, ci.State.Terminated)
 				}
-			} else {
-				Logf("Nil State.Terminated for container '%s' in pod '%s' in namespace '%s' so far", contName, podName, namespace)
+				return true, fmt.Errorf("pod '%s' terminated with failure: %+v", podName, ci.State.Terminated)
 			}
+			Logf("Nil State.Terminated for container '%s' in pod '%s' in namespace '%s' so far", contName, podName, namespace)
 		}
 		return false, nil
 	})
 }
 
-// waitForRCPodOnNode returns the pod from the given replication controller (decribed by rcName) which is scheduled on the given node.
+// waitForRCPodOnNode returns the pod from the given replication controller (described by rcName) which is scheduled on the given node.
 // In case of failure or too long waiting time, an error is returned.
 func waitForRCPodOnNode(c *client.Client, ns, rcName, node string) (*api.Pod, error) {
 	label := labels.SelectorFromSet(labels.Set(map[string]string{"name": rcName}))
@@ -579,7 +632,7 @@ func waitForRCPodOnNode(c *client.Client, ns, rcName, node string) (*api.Pod, er
 	return p, err
 }
 
-// waitForRCPodToDisappear returns nil if the pod from the given replication controller (decribed by rcName) no longer exists.
+// waitForRCPodToDisappear returns nil if the pod from the given replication controller (described by rcName) no longer exists.
 // In case of failure or too long waiting time, an error is returned.
 func waitForRCPodToDisappear(c *client.Client, ns, rcName, podName string) error {
 	label := labels.SelectorFromSet(labels.Set(map[string]string{"name": rcName}))
@@ -959,7 +1012,7 @@ func tryKill(cmd *exec.Cmd) {
 func testContainerOutputInNamespace(scenarioName string, c *client.Client, pod *api.Pod, containerIndex int, expectedOutput []string, ns string) {
 	By(fmt.Sprintf("Creating a pod to test %v", scenarioName))
 
-	defer c.Pods(ns).Delete(pod.Name, nil)
+	defer c.Pods(ns).Delete(pod.Name, api.NewDeleteOptions(0))
 	if _, err := c.Pods(ns).Create(pod); err != nil {
 		Failf("Failed to create pod: %v", err)
 	}
@@ -1007,7 +1060,7 @@ func testContainerOutputInNamespace(scenarioName string, c *client.Client, pod *
 			continue
 
 		}
-		By(fmt.Sprintf("Succesfully fetched pod logs:%v\n", string(logs)))
+		By(fmt.Sprintf("Successfully fetched pod logs:%v\n", string(logs)))
 		break
 	}
 
@@ -1150,6 +1203,15 @@ func RunRC(config RCConfig) error {
 	if config.MemLimit > 0 {
 		rc.Spec.Template.Spec.Containers[0].Resources.Limits[api.ResourceMemory] = *resource.NewQuantity(config.MemLimit, resource.DecimalSI)
 	}
+	if config.CpuRequest > 0 || config.MemRequest > 0 {
+		rc.Spec.Template.Spec.Containers[0].Resources.Requests = api.ResourceList{}
+	}
+	if config.CpuRequest > 0 {
+		rc.Spec.Template.Spec.Containers[0].Resources.Requests[api.ResourceCPU] = *resource.NewMilliQuantity(config.CpuRequest, resource.DecimalSI)
+	}
+	if config.MemRequest > 0 {
+		rc.Spec.Template.Spec.Containers[0].Resources.Requests[api.ResourceMemory] = *resource.NewQuantity(config.MemRequest, resource.DecimalSI)
+	}
 
 	_, err := config.Client.ReplicationControllers(config.Namespace).Create(rc)
 	if err != nil {
@@ -1243,6 +1305,13 @@ func RunRC(config RCConfig) error {
 	}
 
 	if oldRunning != config.Replicas {
+		if pods, err := config.Client.Pods(api.NamespaceAll).List(labels.Everything(), fields.Everything()); err == nil {
+			for _, pod := range pods.Items {
+				Logf("Pod %s\t%s\t%s\t%s", pod.Namespace, pod.Name, pod.Spec.NodeName, pod.DeletionTimestamp)
+			}
+		} else {
+			Logf("Can't list pod debug info: %v", err)
+		}
 		return fmt.Errorf("Only %d pods started out of %d", oldRunning, config.Replicas)
 	}
 	return nil
@@ -1759,7 +1828,7 @@ func resetMetrics(c *client.Client) error {
 		return err
 	}
 	if string(body) != "metrics reset\n" {
-		return fmt.Errorf("Unexpected response: ", string(body))
+		return fmt.Errorf("Unexpected response: %q", string(body))
 	}
 	return nil
 }

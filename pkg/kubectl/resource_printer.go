@@ -176,7 +176,7 @@ type handlerEntry struct {
 // HumanReadablePrinter is an implementation of ResourcePrinter which attempts to provide
 // more elegant output. It is not threadsafe, but you may call PrintObj repeatedly; headers
 // will only be printed if the object type changes. This makes it useful for printing items
-// recieved from watches.
+// received from watches.
 type HumanReadablePrinter struct {
 	handlerMap    map[reflect.Type]*handlerEntry
 	noHeaders     bool
@@ -259,7 +259,7 @@ func (h *HumanReadablePrinter) HandledResources() []string {
 var podColumns = []string{"NAME", "READY", "STATUS", "RESTARTS", "AGE"}
 var podTemplateColumns = []string{"TEMPLATE", "CONTAINER(S)", "IMAGE(S)", "PODLABELS"}
 var replicationControllerColumns = []string{"CONTROLLER", "CONTAINER(S)", "IMAGE(S)", "SELECTOR", "REPLICAS", "AGE"}
-var serviceColumns = []string{"NAME", "LABELS", "SELECTOR", "IP(S)", "PORT(S)", "AGE"}
+var serviceColumns = []string{"NAME", "CLUSTER_IP", "EXTERNAL_IP", "PORT(S)", "SELECTOR", "AGE"}
 var endpointColumns = []string{"NAME", "ENDPOINTS", "AGE"}
 var nodeColumns = []string{"NAME", "LABELS", "STATUS", "AGE"}
 var eventColumns = []string{"FIRSTSEEN", "LASTSEEN", "COUNT", "NAME", "KIND", "SUBOBJECT", "REASON", "SOURCE", "MESSAGE"}
@@ -269,7 +269,7 @@ var namespaceColumns = []string{"NAME", "LABELS", "STATUS", "AGE"}
 var secretColumns = []string{"NAME", "TYPE", "DATA", "AGE"}
 var serviceAccountColumns = []string{"NAME", "SECRETS", "AGE"}
 var persistentVolumeColumns = []string{"NAME", "LABELS", "CAPACITY", "ACCESSMODES", "STATUS", "CLAIM", "REASON", "AGE"}
-var persistentVolumeClaimColumns = []string{"NAME", "LABELS", "STATUS", "VOLUME", "AGE"}
+var persistentVolumeClaimColumns = []string{"NAME", "LABELS", "STATUS", "VOLUME", "CAPACITY", "ACCESSMODES", "AGE"}
 var componentStatusColumns = []string{"NAME", "STATUS", "MESSAGE", "ERROR"}
 var withNamespacePrefixColumns = []string{"NAMESPACE"} // TODO(erictune): print cluster name too.
 
@@ -557,29 +557,52 @@ func printReplicationControllerList(list *api.ReplicationControllerList, w io.Wr
 	return nil
 }
 
+func getServiceExternalIP(svc *api.Service) string {
+	switch svc.Spec.Type {
+	case api.ServiceTypeClusterIP:
+		return "<none>"
+	case api.ServiceTypeNodePort:
+		return "nodes"
+	case api.ServiceTypeLoadBalancer:
+		ingress := svc.Status.LoadBalancer.Ingress
+		result := []string{}
+		for i := range ingress {
+			if ingress[i].IP != "" {
+				result = append(result, ingress[i].IP)
+			}
+		}
+		return strings.Join(result, ",")
+	}
+	return "unknown"
+}
+
+func makePortString(ports []api.ServicePort) string {
+	pieces := make([]string, len(ports))
+	for ix := range ports {
+		port := &ports[ix]
+		pieces[ix] = fmt.Sprintf("%d/%s", port.Port, port.Protocol)
+	}
+	return strings.Join(pieces, ",")
+}
+
 func printService(svc *api.Service, w io.Writer, withNamespace bool, wide bool, columnLabels []string) error {
 	name := svc.Name
 	namespace := svc.Namespace
 
-	ips := []string{svc.Spec.ClusterIP}
-
-	ingress := svc.Status.LoadBalancer.Ingress
-	for i := range ingress {
-		if ingress[i].IP != "" {
-			ips = append(ips, ingress[i].IP)
-		}
-	}
+	internalIP := svc.Spec.ClusterIP
+	externalIP := getServiceExternalIP(svc)
 
 	if withNamespace {
 		if _, err := fmt.Fprintf(w, "%s\t", namespace); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d/%s\t%s",
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s",
 		name,
-		formatLabels(svc.Labels),
+		internalIP,
+		externalIP,
+		makePortString(svc.Spec.Ports),
 		formatLabels(svc.Spec.Selector),
-		ips[0], svc.Spec.Ports[0].Port, svc.Spec.Ports[0].Protocol,
 		translateTimestamp(svc.CreationTimestamp),
 	); err != nil {
 		return err
@@ -587,33 +610,6 @@ func printService(svc *api.Service, w io.Writer, withNamespace bool, wide bool, 
 	if _, err := fmt.Fprint(w, appendLabels(svc.Labels, columnLabels)); err != nil {
 		return err
 	}
-
-	extraLinePrefix := "\t\t\t"
-	if withNamespace {
-		extraLinePrefix = "\t\t\t\t"
-	}
-	count := len(svc.Spec.Ports)
-	if len(ips) > count {
-		count = len(ips)
-	}
-	for i := 1; i < count; i++ {
-		ip := ""
-		if len(ips) > i {
-			ip = ips[i]
-		}
-		port := ""
-		if len(svc.Spec.Ports) > i {
-			port = fmt.Sprintf("%d/%s", svc.Spec.Ports[i].Port, svc.Spec.Ports[i].Protocol)
-		}
-		// Lay out additional ports.
-		if _, err := fmt.Fprintf(w, "%s%s\t%s", extraLinePrefix, ip, port); err != nil {
-			return err
-		}
-		if _, err := fmt.Fprint(w, appendLabelTabs(columnLabels)); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -783,9 +779,9 @@ func printPersistentVolume(pv *api.PersistentVolume, w io.Writer, withNamespace 
 	modesStr := volume.GetAccessModesAsString(pv.Spec.AccessModes)
 
 	aQty := pv.Spec.Capacity[api.ResourceStorage]
-	aSize := aQty.Value()
+	aSize := aQty.String()
 
-	if _, err := fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s",
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s",
 		name,
 		formatLabels(pv.Labels),
 		aSize, modesStr,
@@ -819,13 +815,18 @@ func printPersistentVolumeClaim(pvc *api.PersistentVolumeClaim, w io.Writer, wit
 		}
 	}
 
-	if withNamespace {
-		if _, err := fmt.Fprintf(w, "%s\t", namespace); err != nil {
-			return err
-		}
+	labels := formatLabels(pvc.Labels)
+	phase := pvc.Status.Phase
+	storage := pvc.Spec.Resources.Requests[api.ResourceStorage]
+	capacity := ""
+	accessModes := ""
+	if pvc.Spec.VolumeName != "" {
+		accessModes = volume.GetAccessModesAsString(pvc.Status.AccessModes)
+		storage = pvc.Status.Capacity[api.ResourceStorage]
+		capacity = storage.String()
 	}
 
-	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s", name, pvc.Labels, pvc.Status.Phase, pvc.Spec.VolumeName, translateTimestamp(pvc.CreationTimestamp)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s", name, labels, phase, pvc.Spec.VolumeName, capacity, accessModes, translateTimestamp(pvc.CreationTimestamp)); err != nil {
 		return err
 	}
 	_, err := fmt.Fprint(w, appendLabels(pvc.Labels, columnLabels))
@@ -850,8 +851,8 @@ func printEvent(event *api.Event, w io.Writer, withNamespace bool, wide bool, co
 	}
 	if _, err := fmt.Fprintf(
 		w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\t%s",
-		event.FirstTimestamp.Time.Format(time.RFC1123Z),
-		event.LastTimestamp.Time.Format(time.RFC1123Z),
+		translateTimestamp(event.FirstTimestamp),
+		translateTimestamp(event.LastTimestamp),
 		event.Count,
 		event.InvolvedObject.Name,
 		event.InvolvedObject.Kind,
@@ -984,7 +985,7 @@ func appendLabels(itemLabels map[string]string, columnLabels []string) string {
 		if il, ok := itemLabels[cl]; ok {
 			buffer.WriteString(fmt.Sprint(il))
 		} else {
-			buffer.WriteString("<n/a>")
+			buffer.WriteString("<none>")
 		}
 	}
 	buffer.WriteString("\n")

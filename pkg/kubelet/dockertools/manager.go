@@ -89,9 +89,13 @@ type DockerManager struct {
 	//      means that some entries may be recycled before a pod has been
 	//      deleted.
 	reasonCache stringCache
-	// TODO(yifan): Record the pull failure so we can  eliminate the image checking
+	// TODO(yifan): Record the pull failure so we can eliminate the image checking
 	// in GetPodStatus()?
-	puller DockerPuller
+	// Lower level docker image puller.
+	dockerPuller DockerPuller
+
+	// wrapped image puller.
+	imagePuller kubecontainer.ImagePuller
 
 	// Root of the Docker runtime.
 	dockerRoot string
@@ -110,9 +114,6 @@ type DockerManager struct {
 
 	// Runner of lifecycle events.
 	runner kubecontainer.HandlerRunner
-
-	// Hooks injected into the container runtime.
-	runtimeHooks kubecontainer.RuntimeHooks
 
 	// Handler used to execute commands in containers.
 	execHandler ExecHandler
@@ -138,7 +139,6 @@ func NewDockerManager(
 	networkPlugin network.NetworkPlugin,
 	generator kubecontainer.RunContainerOptionsGenerator,
 	httpClient kubeletTypes.HttpGetter,
-	runtimeHooks kubecontainer.RuntimeHooks,
 	execHandler ExecHandler,
 	oomAdjuster *oom.OomAdjuster,
 	procFs procfs.ProcFsInterface) *DockerManager {
@@ -183,19 +183,19 @@ func NewDockerManager(
 		machineInfo:            machineInfo,
 		podInfraContainerImage: podInfraContainerImage,
 		reasonCache:            reasonCache,
-		puller:                 newDockerPuller(client, qps, burst),
+		dockerPuller:           newDockerPuller(client, qps, burst),
 		dockerRoot:             dockerRoot,
 		containerLogsDir:       containerLogsDir,
 		networkPlugin:          networkPlugin,
 		prober:                 nil,
 		generator:              generator,
-		runtimeHooks:           runtimeHooks,
 		execHandler:            execHandler,
 		oomAdjuster:            oomAdjuster,
 		procFs:                 procFs,
 	}
 	dm.runner = lifecycle.NewHandlerRunner(httpClient, dm, dm)
 	dm.prober = prober.New(dm, readinessManager, containerRefManager, recorder)
+	dm.imagePuller = kubecontainer.NewImagePuller(recorder, dm)
 
 	return dm
 }
@@ -588,7 +588,7 @@ func (dm *DockerManager) runContainer(
 	if len(containerHostname) > hostnameMaxLen {
 		containerHostname = containerHostname[:hostnameMaxLen]
 	}
-	namespacedName := types.NamespacedName{pod.Namespace, pod.Name}
+	namespacedName := types.NamespacedName{Namespace: pod.Namespace, Name: pod.Name}
 	labels := map[string]string{
 		"io.kubernetes.pod.name": namespacedName.String(),
 	}
@@ -645,13 +645,13 @@ func (dm *DockerManager) runContainer(
 	dockerContainer, err := dm.client.CreateContainer(dockerOpts)
 	if err != nil {
 		if ref != nil {
-			dm.recorder.Eventf(ref, "failed", "Failed to create docker container with error: %v", err)
+			dm.recorder.Eventf(ref, "Failed", "Failed to create docker container with error: %v", err)
 		}
 		return "", err
 	}
 
 	if ref != nil {
-		dm.recorder.Eventf(ref, "created", "Created with docker id %v", util.ShortenString(dockerContainer.ID, 12))
+		dm.recorder.Eventf(ref, "Created", "Created with docker id %v", util.ShortenString(dockerContainer.ID, 12))
 	}
 
 	binds := makeMountBindings(opts.Mounts)
@@ -697,13 +697,13 @@ func (dm *DockerManager) runContainer(
 
 	if err = dm.client.StartContainer(dockerContainer.ID, hc); err != nil {
 		if ref != nil {
-			dm.recorder.Eventf(ref, "failed",
+			dm.recorder.Eventf(ref, "Failed",
 				"Failed to start with docker id %v with error: %v", util.ShortenString(dockerContainer.ID, 12), err)
 		}
 		return "", err
 	}
 	if ref != nil {
-		dm.recorder.Eventf(ref, "started", "Started with docker id %v", util.ShortenString(dockerContainer.ID, 12))
+		dm.recorder.Eventf(ref, "Started", "Started with docker id %v", util.ShortenString(dockerContainer.ID, 12))
 	}
 	return dockerContainer.ID, nil
 }
@@ -829,12 +829,12 @@ func (dm *DockerManager) ListImages() ([]kubecontainer.Image, error) {
 // TODO(vmarmol): Consider unexporting.
 // PullImage pulls an image from network to local storage.
 func (dm *DockerManager) PullImage(image kubecontainer.ImageSpec, secrets []api.Secret) error {
-	return dm.puller.Pull(image.Image, secrets)
+	return dm.dockerPuller.Pull(image.Image, secrets)
 }
 
 // IsImagePresent checks whether the container image is already in the local storage.
 func (dm *DockerManager) IsImagePresent(image kubecontainer.ImageSpec) (bool, error) {
-	return dm.puller.IsImagePresent(image.Image)
+	return dm.dockerPuller.IsImagePresent(image.Image)
 }
 
 // Removes the specified image.
@@ -1041,7 +1041,7 @@ func (dm *DockerManager) ExecInContainer(containerId string, cmd []string, stdin
 		return err
 	}
 	if !container.State.Running {
-		return fmt.Errorf("container not running (%s)", container)
+		return fmt.Errorf("container not running (%s)", container.ID)
 	}
 
 	return dm.execHandler.ExecInContainer(dm.client, container, cmd, stdin, stdout, stderr, tty)
@@ -1086,7 +1086,7 @@ func (dm *DockerManager) PortForward(pod *kubecontainer.Pod, port uint16, stream
 	}
 
 	if !container.State.Running {
-		return fmt.Errorf("container not running (%s)", container)
+		return fmt.Errorf("container not running (%s)", container.ID)
 	}
 
 	containerPid := container.State.Pid
@@ -1218,7 +1218,7 @@ func (dm *DockerManager) killContainer(containerID types.UID) error {
 		glog.Warningf("No ref for pod '%v'", ID)
 	} else {
 		// TODO: pass reason down here, and state, or move this call up the stack.
-		dm.recorder.Eventf(ref, "killing", "Killing with docker id %v", util.ShortenString(ID, 12))
+		dm.recorder.Eventf(ref, "Killing", "Killing with docker id %v", util.ShortenString(ID, 12))
 	}
 	return err
 }
@@ -1298,7 +1298,7 @@ func (dm *DockerManager) runContainerInPod(pod *api.Pod, container *api.Containe
 	}
 
 	// currently, Docker does not have a flag by which the ndots option can be passed.
-	// (A seperate issue has been filed with Docker to add a ndots flag)
+	// (A separate issue has been filed with Docker to add a ndots flag)
 	// The addNDotsOption call appends the ndots option to the resolv.conf file generated by docker.
 	// This resolv.conf file is shared by all containers of the same pod, and needs to be modified only once per pod.
 	// we modify it when the pause container is created since it is the first container created in the pod since it holds
@@ -1368,7 +1368,7 @@ func (dm *DockerManager) createPodInfraContainer(pod *api.Pod) (kubeletTypes.Doc
 	}
 
 	// No pod secrets for the infra container.
-	if err := dm.pullImage(pod, container, nil); err != nil {
+	if err := dm.imagePuller.PullImage(pod, container, nil); err != nil {
 		return "", err
 	}
 
@@ -1525,33 +1525,6 @@ func (dm *DockerManager) clearReasonCache(pod *api.Pod, container *api.Container
 	dm.reasonCache.Remove(pod.UID, container.Name)
 }
 
-// Pull the image for the specified pod and container.
-func (dm *DockerManager) pullImage(pod *api.Pod, container *api.Container, pullSecrets []api.Secret) error {
-	ref, err := kubecontainer.GenerateContainerRef(pod, container)
-	if err != nil {
-		glog.Errorf("Couldn't make a ref to pod %v, container %v: '%v'", pod.Name, container.Name, err)
-	}
-	spec := kubecontainer.ImageSpec{container.Image}
-	present, err := dm.IsImagePresent(spec)
-	if err != nil {
-		if ref != nil {
-			dm.recorder.Eventf(ref, "failed", "Failed to inspect image %q: %v", container.Image, err)
-		}
-		return fmt.Errorf("failed to inspect image %q: %v", container.Image, err)
-	}
-	if !dm.runtimeHooks.ShouldPullImage(pod, container, present) {
-		if present && ref != nil {
-			dm.recorder.Eventf(ref, "pulled", "Container image %q already present on machine", container.Image)
-		}
-		return nil
-	}
-
-	dm.runtimeHooks.ReportImagePulling(pod, container)
-	err = dm.PullImage(spec, pullSecrets)
-	dm.runtimeHooks.ReportImagePulled(pod, container, err)
-	return err
-}
-
 // Sync the running pod to match the specified desired pod.
 func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, podStatus api.PodStatus, pullSecrets []api.Secret) error {
 	start := time.Now()
@@ -1612,11 +1585,20 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, pod
 	for idx := range containerChanges.ContainersToStart {
 		container := &pod.Spec.Containers[idx]
 		glog.V(4).Infof("Creating container %+v in pod %v", container, podFullName)
-		err := dm.pullImage(pod, container, pullSecrets)
+		err := dm.imagePuller.PullImage(pod, container, pullSecrets)
 		dm.updateReasonCache(pod, container, err)
 		if err != nil {
 			glog.Warningf("Failed to pull image %q from pod %q and container %q: %v", container.Image, kubecontainer.GetPodFullName(pod), container.Name, err)
 			continue
+		}
+
+		if container.SecurityContext != nil && container.SecurityContext.RunAsNonRoot {
+			err := dm.verifyNonRoot(container)
+			dm.updateReasonCache(pod, container, err)
+			if err != nil {
+				glog.Errorf("Error running pod %q container %q: %v", kubecontainer.GetPodFullName(pod), container.Name, err)
+				continue
+			}
 		}
 
 		// TODO(dawnchen): Check RestartPolicy.DelaySeconds before restart a container
@@ -1634,4 +1616,63 @@ func (dm *DockerManager) SyncPod(pod *api.Pod, runningPod kubecontainer.Pod, pod
 	}
 
 	return nil
+}
+
+// verifyNonRoot returns an error if the container or image will run as the root user.
+func (dm *DockerManager) verifyNonRoot(container *api.Container) error {
+	if securitycontext.HasRunAsUser(container) {
+		if securitycontext.HasRootRunAsUser(container) {
+			return fmt.Errorf("container's runAsUser breaks non-root policy")
+		}
+		return nil
+	}
+
+	imgRoot, err := dm.isImageRoot(container.Image)
+	if err != nil {
+		return err
+	}
+	if imgRoot {
+		return fmt.Errorf("container has no runAsUser and image will run as root")
+	}
+
+	return nil
+}
+
+// isImageRoot returns true if the user directive is not set on the image, the user is set to 0
+// or the user is set to root.  If there is an error inspecting the image this method will return
+// false and return the error.
+func (dm *DockerManager) isImageRoot(image string) (bool, error) {
+	img, err := dm.client.InspectImage(image)
+	if err != nil {
+		return false, err
+	}
+	if img == nil || img.Config == nil {
+		return false, fmt.Errorf("unable to inspect image %s, nil Config", image)
+	}
+
+	user := getUidFromUser(img.Config.User)
+	// if no user is defined container will run as root
+	if user == "" {
+		return true, nil
+	}
+	// do not allow non-numeric user directives
+	uid, err := strconv.Atoi(user)
+	if err != nil {
+		return false, fmt.Errorf("unable to validate image is non-root, non-numeric user (%s) is not allowed", user)
+	}
+	// user is numeric, check for 0
+	return uid == 0, nil
+}
+
+// getUidFromUser splits the uid out of a uid:gid string.
+func getUidFromUser(id string) string {
+	if id == "" {
+		return id
+	}
+	// split instances where the id may contain uid:gid
+	if strings.Contains(id, ":") {
+		return strings.Split(id, ":")[0]
+	}
+	// no gid, just return the id
+	return id
 }

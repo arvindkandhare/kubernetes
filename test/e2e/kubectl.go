@@ -72,13 +72,13 @@ var _ = Describe("Kubectl client", func() {
 		c, err = loadClient()
 		expectNoError(err)
 		testingNs, err = createTestingNS("kubectl", c)
-		ns = testingNs.Name
 		Expect(err).NotTo(HaveOccurred())
+		ns = testingNs.Name
 	})
 
 	AfterEach(func() {
 		By(fmt.Sprintf("Destroying namespace for this suite %v", ns))
-		if err := c.Namespaces().Delete(ns); err != nil {
+		if err := deleteNS(c, ns); err != nil {
 			Failf("Couldn't delete ns %s", err)
 		}
 	})
@@ -169,7 +169,7 @@ var _ = Describe("Kubectl client", func() {
 		})
 		It("should support port-forward", func() {
 			By("forwarding the container port to a local port")
-			cmd := kubectlCmd("port-forward", fmt.Sprintf("--namespace=%v", ns), "-p", simplePodName, fmt.Sprintf(":%d", simplePodPort))
+			cmd := kubectlCmd("port-forward", fmt.Sprintf("--namespace=%v", ns), simplePodName, fmt.Sprintf(":%d", simplePodPort))
 			defer tryKill(cmd)
 			// This is somewhat ugly but is the only way to retrieve the port that was picked
 			// by the port-forward command. We don't want to hard code the port as we have no
@@ -223,7 +223,7 @@ var _ = Describe("Kubectl client", func() {
 		It("should check if Kubernetes master services is included in cluster-info", func() {
 			By("validating cluster-info")
 			output := runKubectl("cluster-info")
-			// Can't check exact strings due to terminal controll commands (colors)
+			// Can't check exact strings due to terminal control commands (colors)
 			requiredItems := []string{"Kubernetes master", "is running at"}
 			if providerIs("gce", "gke") {
 				requiredItems = append(requiredItems, "KubeDNS", "Heapster")
@@ -348,12 +348,15 @@ var _ = Describe("Kubectl client", func() {
 					endpoints, err := c.Endpoints(ns).Get(name)
 					Expect(err).NotTo(HaveOccurred())
 
-					ipToPort := getPortsByIp(endpoints.Subsets)
-					if len(ipToPort) != 1 {
-						Logf("No IP found, retrying")
+					uidToPort := getContainerPortsByPodUID(endpoints)
+					if len(uidToPort) == 0 {
+						Logf("No endpoint found, retrying")
 						continue
 					}
-					for _, port := range ipToPort {
+					if len(uidToPort) > 1 {
+						Fail("To many endpoints found")
+					}
+					for _, port := range uidToPort {
 						if port[0] != redisPort {
 							Failf("Wrong endpoint port: %d", port[0])
 						}
@@ -467,7 +470,7 @@ var _ = Describe("Kubectl client", func() {
 					}
 				}
 				if !found {
-					Failf("Added annation not found")
+					Failf("Added annotation not found")
 				}
 			})
 		})
@@ -485,7 +488,7 @@ var _ = Describe("Kubectl client", func() {
 		})
 	})
 
-	Describe("Kubectl run", func() {
+	Describe("Kubectl run rc", func() {
 		var nsFlag string
 		var rcName string
 
@@ -523,6 +526,59 @@ var _ = Describe("Kubectl client", func() {
 			if pods == nil || len(pods) != 1 || len(pods[0].Spec.Containers) != 1 || pods[0].Spec.Containers[0].Image != image {
 				runKubectl("get", "pods", "-L", "run", nsFlag)
 				Failf("Failed creating 1 pod with expected image %s. Number of pods = %v", image, len(pods))
+			}
+		})
+
+	})
+
+	Describe("Kubectl run pod", func() {
+		var nsFlag string
+		var podName string
+
+		BeforeEach(func() {
+			nsFlag = fmt.Sprintf("--namespace=%v", ns)
+			podName = "e2e-test-nginx-pod"
+		})
+
+		AfterEach(func() {
+			runKubectl("stop", "pods", podName, nsFlag)
+		})
+
+		It("should create a pod from an image when restart is OnFailure", func() {
+			image := "nginx"
+
+			By("running the image " + image)
+			runKubectl("run", podName, "--restart=OnFailure", "--image="+image, nsFlag)
+			By("verifying the pod " + podName + " was created")
+			pod, err := c.Pods(ns).Get(podName)
+			if err != nil {
+				Failf("Failed getting pod %s: %v", podName, err)
+			}
+			containers := pod.Spec.Containers
+			if containers == nil || len(containers) != 1 || containers[0].Image != image {
+				Failf("Failed creating pod %s for 1 pod with expected image %s", podName, image)
+			}
+			if pod.Spec.RestartPolicy != api.RestartPolicyOnFailure {
+				Failf("Failed creating a pod with correct restart policy for --restart=OnFailure")
+			}
+		})
+
+		It("should create a pod from an image when restart is Never", func() {
+			image := "nginx"
+
+			By("running the image " + image)
+			runKubectl("run", podName, "--restart=Never", "--image="+image, nsFlag)
+			By("verifying the pod " + podName + " was created")
+			pod, err := c.Pods(ns).Get(podName)
+			if err != nil {
+				Failf("Failed getting pod %s: %v", podName, err)
+			}
+			containers := pod.Spec.Containers
+			if containers == nil || len(containers) != 1 || containers[0].Image != image {
+				Failf("Failed creating pod %s for 1 pod with expected image %s", podName, image)
+			}
+			if pod.Spec.RestartPolicy != api.RestartPolicyNever {
+				Failf("Failed creating a pod with correct restart policy for --restart=OnFailure")
 			}
 		})
 

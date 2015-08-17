@@ -25,7 +25,6 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest/resttest"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/storage"
 	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
@@ -35,10 +34,6 @@ import (
 
 	"github.com/coreos/go-etcd/etcd"
 )
-
-type testRegistry struct {
-	*registrytest.GenericRegistry
-}
 
 func newStorage(t *testing.T) (*REST, *StatusREST, *tools.FakeEtcdClient, storage.Interface) {
 	fakeEtcdClient := tools.NewFakeEtcdClient(t)
@@ -152,34 +147,10 @@ func TestEtcdListPersistentVolumeClaims(t *testing.T) {
 }
 
 func TestEtcdGetPersistentVolumeClaims(t *testing.T) {
-	ctx := api.NewDefaultContext()
-	registry, _, fakeClient, _ := newStorage(t)
-	persistentVolume := validNewPersistentVolumeClaim("foo", api.NamespaceDefault)
-	name := persistentVolume.Name
-	key, _ := registry.KeyFunc(ctx, name)
-	key = etcdtest.AddPrefix(key)
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, persistentVolume), 0)
-
-	response, err := fakeClient.Get(key, false, false)
-	if err != nil {
-		t.Fatalf("Unexpected error %v", err)
-	}
-	var persistentVolumeOut api.PersistentVolumeClaim
-	err = latest.Codec.DecodeInto([]byte(response.Node.Value), &persistentVolumeOut)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-
-	obj, err := registry.Get(ctx, name)
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	got := obj.(*api.PersistentVolumeClaim)
-
-	persistentVolume.ObjectMeta.ResourceVersion = got.ObjectMeta.ResourceVersion
-	if e, a := persistentVolume, got; !api.Semantic.DeepEqual(*e, *a) {
-		t.Errorf("Unexpected persistentVolume: %#v, expected %#v", e, a)
-	}
+	storage, _, fakeClient, _ := newStorage(t)
+	test := resttest.New(t, storage, fakeClient.SetError)
+	claim := validNewPersistentVolumeClaim("foo", api.NamespaceDefault)
+	test.TestGet(claim)
 }
 
 func TestListEmptyPersistentVolumeClaimsList(t *testing.T) {

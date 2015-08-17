@@ -390,7 +390,7 @@ func TestSyncPodsDeletesWhenSourcesAreReady(t *testing.T) {
 func TestMountExternalVolumes(t *testing.T) {
 	testKubelet := newTestKubelet(t)
 	kubelet := testKubelet.kubelet
-	kubelet.volumePluginMgr.InitPlugins([]volume.VolumePlugin{&volume.FakeVolumePlugin{"fake", nil}}, &volumeHost{kubelet})
+	kubelet.volumePluginMgr.InitPlugins([]volume.VolumePlugin{&volume.FakeVolumePlugin{PluginName: "fake", Host: nil}}, &volumeHost{kubelet})
 
 	pod := api.Pod{
 		ObjectMeta: api.ObjectMeta{
@@ -409,7 +409,7 @@ func TestMountExternalVolumes(t *testing.T) {
 	}
 	podVolumes, err := kubelet.mountExternalVolumes(&pod)
 	if err != nil {
-		t.Errorf("Expected sucess: %v", err)
+		t.Errorf("Expected success: %v", err)
 	}
 	expectedPodVolumes := []string{"vol1"}
 	if len(expectedPodVolumes) != len(podVolumes) {
@@ -425,7 +425,7 @@ func TestMountExternalVolumes(t *testing.T) {
 func TestGetPodVolumesFromDisk(t *testing.T) {
 	testKubelet := newTestKubelet(t)
 	kubelet := testKubelet.kubelet
-	plug := &volume.FakeVolumePlugin{"fake", nil}
+	plug := &volume.FakeVolumePlugin{PluginName: "fake", Host: nil}
 	kubelet.volumePluginMgr.InitPlugins([]volume.VolumePlugin{plug}, &volumeHost{kubelet})
 
 	volsOnDisk := []struct {
@@ -439,7 +439,7 @@ func TestGetPodVolumesFromDisk(t *testing.T) {
 
 	expectedPaths := []string{}
 	for i := range volsOnDisk {
-		fv := volume.FakeVolume{volsOnDisk[i].podUID, volsOnDisk[i].volName, plug}
+		fv := volume.FakeVolume{PodUID: volsOnDisk[i].podUID, VolName: volsOnDisk[i].volName, Plugin: plug}
 		fv.SetUp()
 		expectedPaths = append(expectedPaths, fv.GetPath())
 	}
@@ -1187,6 +1187,15 @@ func TestMakeEnvironmentVariables(t *testing.T) {
 							},
 						},
 					},
+					{
+						Name: "POD_IP",
+						ValueFrom: &api.EnvVarSource{
+							FieldRef: &api.ObjectFieldSelector{
+								APIVersion: testapi.Version(),
+								FieldPath:  "status.podIP",
+							},
+						},
+					},
 				},
 			},
 			masterServiceNs: "nothing",
@@ -1194,6 +1203,7 @@ func TestMakeEnvironmentVariables(t *testing.T) {
 			expectedEnvs: []kubecontainer.EnvVar{
 				{Name: "POD_NAME", Value: "dapi-test-pod-name"},
 				{Name: "POD_NAMESPACE", Value: "downward-api"},
+				{Name: "POD_IP", Value: "1.2.3.4"},
 			},
 		},
 		{
@@ -1345,6 +1355,7 @@ func TestMakeEnvironmentVariables(t *testing.T) {
 				Name:      "dapi-test-pod-name",
 			},
 		}
+		testPod.Status.PodIP = "1.2.3.4"
 
 		result, err := kl.makeEnvironmentVariables(testPod, tc.container)
 		if err != nil {
@@ -2314,7 +2325,10 @@ func TestUpdateNewNodeStatus(t *testing.T) {
 				api.ResourceMemory: *resource.NewQuantity(1024, resource.BinarySI),
 				api.ResourcePods:   *resource.NewQuantity(0, resource.DecimalSI),
 			},
-			Addresses: []api.NodeAddress{{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"}},
+			Addresses: []api.NodeAddress{
+				{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"},
+				{Type: api.NodeInternalIP, Address: "127.0.0.1"},
+			},
 		},
 	}
 
@@ -2415,7 +2429,10 @@ func TestUpdateExistingNodeStatus(t *testing.T) {
 				api.ResourceMemory: *resource.NewQuantity(1024, resource.BinarySI),
 				api.ResourcePods:   *resource.NewQuantity(0, resource.DecimalSI),
 			},
-			Addresses: []api.NodeAddress{{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"}},
+			Addresses: []api.NodeAddress{
+				{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"},
+				{Type: api.NodeInternalIP, Address: "127.0.0.1"},
+			},
 		},
 	}
 
@@ -2506,7 +2523,10 @@ func TestUpdateNodeStatusWithoutContainerRuntime(t *testing.T) {
 				api.ResourceMemory: *resource.NewQuantity(1024, resource.BinarySI),
 				api.ResourcePods:   *resource.NewQuantity(0, resource.DecimalSI),
 			},
-			Addresses: []api.NodeAddress{{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"}},
+			Addresses: []api.NodeAddress{
+				{Type: api.NodeLegacyHostIP, Address: "127.0.0.1"},
+				{Type: api.NodeInternalIP, Address: "127.0.0.1"},
+			},
 		},
 	}
 
@@ -3131,7 +3151,7 @@ func TestSyncPodsSetStatusToFailedForPodsThatRunTooLong(t *testing.T) {
 	podFullName := kubecontainer.GetPodFullName(pods[0])
 	status, found := kubelet.statusManager.GetPodStatus(podFullName)
 	if !found {
-		t.Errorf("expected to found status for pod %q", status)
+		t.Errorf("expected to found status for pod %q", podFullName)
 	}
 	if status.Phase != api.PodFailed {
 		t.Fatalf("expected pod status %q, ot %q.", api.PodFailed, status.Phase)
@@ -3186,7 +3206,7 @@ func TestSyncPodsDoesNotSetPodsThatDidNotRunTooLongToFailed(t *testing.T) {
 	podFullName := kubecontainer.GetPodFullName(pods[0])
 	status, found := kubelet.statusManager.GetPodStatus(podFullName)
 	if !found {
-		t.Errorf("expected to found status for pod %q", status)
+		t.Errorf("expected to found status for pod %q", podFullName)
 	}
 	if status.Phase == api.PodFailed {
 		t.Fatalf("expected pod status to not be %q", status.Phase)

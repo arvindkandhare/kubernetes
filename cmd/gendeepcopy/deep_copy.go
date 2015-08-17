@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -25,16 +27,21 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	_ "k8s.io/kubernetes/pkg/api/v1"
+	_ "k8s.io/kubernetes/pkg/expapi"
+	_ "k8s.io/kubernetes/pkg/expapi/v1"
 	pkg_runtime "k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
 
 	"github.com/golang/glog"
 	flag "github.com/spf13/pflag"
+	"golang.org/x/tools/imports"
 )
 
+const pkgBase = "k8s.io/kubernetes/pkg"
+
 var (
-	functionDest = flag.StringP("func-dest", "f", "-", "Output for deep copy functions; '-' means stdout")
-	version      = flag.StringP("version", "v", "v1", "Version for deep copies.")
+	functionDest = flag.StringP("funcDest", "f", "-", "Output for deep copy functions; '-' means stdout")
+	groupVersion = flag.StringP("version", "v", "", "groupPath/version for deep copies.")
 	overwrites   = flag.StringP("overwrites", "o", "", "Comma-separated overwrites for package names")
 )
 
@@ -54,15 +61,27 @@ func main() {
 		funcOut = file
 	}
 
-	knownVersion := *version
+	data := new(bytes.Buffer)
+
+	group, version := path.Split(*groupVersion)
+	group = strings.TrimRight(group, "/")
 	registerTo := "api.Scheme"
-	if knownVersion == "api" {
-		knownVersion = api.Scheme.Raw().InternalVersion
+	if *groupVersion == "api/" {
 		registerTo = "Scheme"
 	}
-	pkgPath := path.Join("k8s.io/kubernetes/pkg/api", knownVersion)
-	generator := pkg_runtime.NewDeepCopyGenerator(api.Scheme.Raw(), pkgPath, util.NewStringSet("k8s.io/kubernetes"))
-	generator.AddImport("k8s.io/kubernetes/pkg/api")
+	pkgname := group
+	if len(version) != 0 {
+		pkgname = version
+	}
+
+	_, err := data.WriteString(fmt.Sprintf("package %s\n", pkgname))
+	if err != nil {
+		glog.Fatalf("error writing package line: %v", err)
+	}
+
+	versionPath := path.Join(pkgBase, group, version)
+	generator := pkg_runtime.NewDeepCopyGenerator(api.Scheme.Raw(), versionPath, util.NewStringSet("k8s.io/kubernetes"))
+	generator.AddImport(path.Join(pkgBase, "api"))
 
 	if len(*overwrites) > 0 {
 		for _, overwrite := range strings.Split(*overwrites, ",") {
@@ -73,19 +92,29 @@ func main() {
 			generator.OverwritePackage(vals[0], vals[1])
 		}
 	}
-	for _, knownType := range api.Scheme.KnownTypes(knownVersion) {
+	for _, knownType := range api.Scheme.KnownTypes(version) {
+		if !strings.HasPrefix(knownType.PkgPath(), versionPath) {
+			continue
+		}
 		if err := generator.AddType(knownType); err != nil {
 			glog.Errorf("error while generating deep copy functions for %v: %v", knownType, err)
 		}
 	}
 	generator.RepackImports()
-	if err := generator.WriteImports(funcOut); err != nil {
+	if err := generator.WriteImports(data); err != nil {
 		glog.Fatalf("error while writing imports: %v", err)
 	}
-	if err := generator.WriteDeepCopyFunctions(funcOut); err != nil {
+	if err := generator.WriteDeepCopyFunctions(data); err != nil {
 		glog.Fatalf("error while writing deep copy functions: %v", err)
 	}
-	if err := generator.RegisterDeepCopyFunctions(funcOut, registerTo); err != nil {
+	if err := generator.RegisterDeepCopyFunctions(data, registerTo); err != nil {
 		glog.Fatalf("error while registering deep copy functions: %v", err)
+	}
+	b, err := imports.Process("", data.Bytes(), nil)
+	if err != nil {
+		glog.Fatalf("error while update imports: %v", err)
+	}
+	if _, err := funcOut.Write(b); err != nil {
+		glog.Fatalf("error while writing out the resulting file: %v", err)
 	}
 }

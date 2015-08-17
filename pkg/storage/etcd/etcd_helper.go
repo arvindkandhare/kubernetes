@@ -176,15 +176,6 @@ func (h *etcdHelper) Delete(key string, out runtime.Object) error {
 }
 
 // Implements storage.Interface.
-func (h *etcdHelper) RecursiveDelete(key string, recursive bool) error {
-	key = h.prefixEtcdKey(key)
-	startTime := time.Now()
-	_, err := h.client.Delete(key, recursive)
-	metrics.RecordEtcdRequestLatency("delete", "UNKNOWN", startTime)
-	return err
-}
-
-// Implements storage.Interface.
 func (h *etcdHelper) Watch(key string, resourceVersion uint64, filter storage.FilterFunc) (watch.Interface, error) {
 	key = h.prefixEtcdKey(key)
 	w := newEtcdWatcher(false, nil, filter, h.codec, h.versioner, nil, h)
@@ -476,7 +467,7 @@ func (h *etcdHelper) getFromCache(index uint64) (runtime.Object, bool) {
 	}()
 	obj, found := h.cache.Get(index)
 	if found {
-		// We should not return the object itself to avoid poluting the cache if someone
+		// We should not return the object itself to avoid polluting the cache if someone
 		// modifies returned values.
 		objCopy, err := h.copier.Copy(obj.(runtime.Object))
 		if err != nil {
