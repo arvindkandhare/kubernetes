@@ -17,9 +17,15 @@
 # exit on any error
 set -e
 
+
+
+
 # Set the host name explicitly
 # See: https://github.com/mitchellh/vagrant/issues/2430
 hostnamectl set-hostname ${MASTER_NAME}
+
+
+
 
 # Workaround to vagrant inability to guess interface naming sequence
 # Tell system to abandon the new naming scheme and use eth* instead

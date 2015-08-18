@@ -31,8 +31,8 @@ printf '%s' $1 > seeds
 #create network.json file
 echo "Creating The network.json File"
 hn=$(hostname)
-ip=$(/sbin/ifconfig eth0 | grep 'inet addr:' | cut -d: -f2 | awk '{ print $1}')
-printf '{"private_interface_name":"eth0","public_interface_name":"eth0","hostname":"%s","public_ip":"%s"}' $hn $ip > network.json
+ip=$(/sbin/ifconfig eth1 | grep 'inet addr:' | cut -d: -f2 | awk '{ print $1}')
+printf '{"private_interface_name":"eth0","public_interface_name":"eth1","hostname":"%s","public_ip":"%s"}' $hn $ip > network.json
 
 #create some folders, set permissions, and format the attached volume
 echo "Creating /ecs/uuid-1 folder"

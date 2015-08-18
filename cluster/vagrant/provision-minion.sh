@@ -17,6 +17,12 @@
 # exit on any error
 set -e
 
+
+#Running setup script for ECS. This should be done by the fabric like component in kube - TBD
+
+/vagrant/examples/ecs_deploy/hostprep.sh 10.245.1.3,10.245.1.4,10.245.1.5
+
+
 #setup kubelet config
 mkdir -p "/var/lib/kubelet"
 (umask 077;
