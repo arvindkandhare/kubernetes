@@ -35,10 +35,10 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/client"
-	"k8s.io/kubernetes/pkg/client/cache"
-	"k8s.io/kubernetes/pkg/client/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/clientcmd/api"
+	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/unversioned/cache"
+	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/kubectl"
@@ -526,7 +526,7 @@ func deleteNS(c *client.Client, namespace string) error {
 		return err
 	}
 
-	err := wait.Poll(1*time.Second, 2*time.Minute, func() (bool, error) {
+	err := wait.Poll(5*time.Second, 5*time.Minute, func() (bool, error) {
 		if _, err := c.Namespaces().Get(namespace); err != nil {
 			if apierrs.IsNotFound(err) {
 				return true, nil
@@ -1376,7 +1376,7 @@ func getNodeEvents(c *client.Client, nodeName string) []api.Event {
 	return events.Items
 }
 
-func ScaleRC(c *client.Client, ns, name string, size uint) error {
+func ScaleRC(c *client.Client, ns, name string, size uint, wait bool) error {
 	By(fmt.Sprintf("%v Scaling replication controller %s in namespace %s to %d", time.Now(), name, ns, size))
 	scaler, err := kubectl.ScalerFor("ReplicationController", kubectl.NewScalerClient(c))
 	if err != nil {
@@ -1386,6 +1386,9 @@ func ScaleRC(c *client.Client, ns, name string, size uint) error {
 	waitForReplicas := kubectl.NewRetryParams(5*time.Second, 5*time.Minute)
 	if err = scaler.Scale(ns, name, size, nil, waitForScale, waitForReplicas); err != nil {
 		return err
+	}
+	if !wait {
+		return nil
 	}
 	return waitForRCPodsRunning(c, ns, name)
 }

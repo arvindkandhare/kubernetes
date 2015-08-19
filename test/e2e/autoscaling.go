@@ -54,64 +54,65 @@ var _ = Describe("Autoscaling", func() {
 		setUpAutoscaler("cpu/node_utilization", 0.7, nodeCount, nodeCount+1)
 
 		ConsumeCpu(f, "cpu-utilization", nodeCount*coresPerNode)
-		expectNoError(waitForClusterSize(f.Client, nodeCount+1))
+		expectNoError(waitForClusterSize(f.Client, nodeCount+1, 20*time.Minute))
 
 		StopConsuming(f, "cpu-utilization")
-		expectNoError(waitForClusterSize(f.Client, nodeCount))
+		expectNoError(waitForClusterSize(f.Client, nodeCount, 20*time.Minute))
 	})
 
 	It("[Skipped] should scale cluster size based on cpu reservation", func() {
 		setUpAutoscaler("cpu/node_reservation", 0.7, 1, 10)
 
 		ReserveCpu(f, "cpu-reservation", 800)
-		expectNoError(waitForClusterSize(f.Client, 2))
+		expectNoError(waitForClusterSize(f.Client, 2, 20*time.Minute))
 
 		StopConsuming(f, "cpu-reservation")
-		expectNoError(waitForClusterSize(f.Client, 1))
+		expectNoError(waitForClusterSize(f.Client, 1, 20*time.Minute))
 	})
 
 	It("[Skipped] should scale cluster size based on memory utilization", func() {
 		setUpAutoscaler("memory/node_utilization", 0.5, 1, 10)
 
 		ConsumeMemory(f, "memory-utilization", 2)
-		expectNoError(waitForClusterSize(f.Client, 2))
+		expectNoError(waitForClusterSize(f.Client, 2, 20*time.Minute))
 
 		StopConsuming(f, "memory-utilization")
-		expectNoError(waitForClusterSize(f.Client, 1))
+		expectNoError(waitForClusterSize(f.Client, 1, 20*time.Minute))
 	})
 
 	It("[Skipped] should scale cluster size based on memory reservation", func() {
 		setUpAutoscaler("memory/node_reservation", 0.5, 1, 10)
 
 		ReserveMemory(f, "memory-reservation", 2)
-		expectNoError(waitForClusterSize(f.Client, 2))
+		expectNoError(waitForClusterSize(f.Client, 2, 20*time.Minute))
 
 		StopConsuming(f, "memory-reservation")
-		expectNoError(waitForClusterSize(f.Client, 1))
+		expectNoError(waitForClusterSize(f.Client, 1, 20*time.Minute))
 	})
 })
 
 func setUpAutoscaler(metric string, target float64, min, max int) {
 	// TODO integrate with kube-up.sh script once it will support autoscaler setup.
 	By("Setting up autoscaler to scale based on " + metric)
-	_, err := exec.Command("gcloud", "preview", "autoscaler",
-		"--zone="+testContext.CloudConfig.Zone,
-		"create", "e2e-test-autoscaler",
+	out, err := exec.Command("gcloud", "compute", "instance-groups", "managed", "set-autoscaling",
+		testContext.CloudConfig.NodeInstanceGroup,
 		"--project="+testContext.CloudConfig.ProjectID,
-		"--target="+testContext.CloudConfig.NodeInstanceGroup,
-		"--custom-metric=custom.cloudmonitoring.googleapis.com/kubernetes.io/"+metric,
-		fmt.Sprintf("--target-custom-metric-utilization=%v", target),
-		"--custom-metric-utilization-target-type=GAUGE",
+		"--zone="+testContext.CloudConfig.Zone,
+		"--custom-metric-utilization=metric=custom.cloudmonitoring.googleapis.com/kubernetes.io/"+metric+fmt.Sprintf(",utilization-target=%v", target)+",utilization-target-type=GAUGE",
 		fmt.Sprintf("--min-num-replicas=%v", min),
 		fmt.Sprintf("--max-num-replicas=%v", max),
 	).CombinedOutput()
-	expectNoError(err)
+	expectNoError(err, "Output: "+string(out))
 }
 
 func cleanUpAutoscaler() {
 	By("Removing autoscaler")
-	_, err := exec.Command("gcloud", "preview", "autoscaler", "--zone="+testContext.CloudConfig.Zone, "delete", "e2e-test-autoscaler").CombinedOutput()
-	expectNoError(err)
+	out, err := exec.Command("gcloud", "compute", "instance-groups", "managed", "stop-autoscaling",
+		testContext.CloudConfig.NodeInstanceGroup,
+		"--project="+testContext.CloudConfig.ProjectID,
+		"--zone="+testContext.CloudConfig.Zone,
+	).CombinedOutput()
+	expectNoError(err, "Output: "+string(out))
 }
 
 func CreateService(f *Framework, name string) {

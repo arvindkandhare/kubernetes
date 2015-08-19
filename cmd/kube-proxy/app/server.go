@@ -26,10 +26,10 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client"
-	"k8s.io/kubernetes/pkg/client/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/clientcmd/api"
-	"k8s.io/kubernetes/pkg/client/record"
+	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	"k8s.io/kubernetes/pkg/client/unversioned/record"
 	"k8s.io/kubernetes/pkg/kubelet/qos"
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/proxy/config"
@@ -159,7 +159,8 @@ func (s *ProxyServer) Run(_ []string) error {
 	if !s.ForceUserspaceProxy && shouldUseIptables {
 		glog.V(2).Info("Using iptables Proxier.")
 
-		proxierIptables, err := iptables.NewProxier(utiliptables.New(exec.New(), protocol), s.SyncPeriod)
+		execer := exec.New()
+		proxierIptables, err := iptables.NewProxier(utiliptables.New(execer, protocol), execer, s.SyncPeriod)
 		if err != nil {
 			glog.Fatalf("Unable to create proxier: %v", err)
 		}
