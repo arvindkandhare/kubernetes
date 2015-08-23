@@ -25,6 +25,12 @@ spec:
   - port: 4443
     name: sixth
  
+  - port: 9020
+    name: seventh
+
+  - port: 9021
+    name: eighth
+
   type: LoadBalancer
   selector:
     name: ecs
