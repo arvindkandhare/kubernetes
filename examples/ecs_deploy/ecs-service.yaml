@@ -24,6 +24,7 @@ spec:
 
   - port: 4443
     name: sixth
-
+ 
+  type: LoadBalancer
   selector:
     name: ecs
