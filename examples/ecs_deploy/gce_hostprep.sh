@@ -4,6 +4,8 @@
 #This script will prepare an Ubuntu Host for running an ECS container. 
 #This has been properly tested with Docker Machine's default image in AWS.
 
+set -v
+
 #Read in variable arguments from command line
 if [ -z "$1" ]; then
   echo "You forgot to specify 3 IP Addresses"
@@ -23,6 +25,28 @@ if [ -z "$2" ]; then
   echo "Using xvdf as Volume mount"
 fi
 
+#Add storageos group
+
+addgroup  storageos --gid=444
+adduser storageos --uid=444 --gid=444 --quiet --system
+
+#update system and install xfs
+echo "Updating Debian/Ubuntu"
+apt-get update -y
+echo "Install XFS Tools"
+apt-get install xfsprogs -y
+echo "Installing dbus tools"
+apt-get install dbus -y
+apt-get install python-dbus -y
+apt-get install python-gobject -y
+
+cp /tmp/com.emc.vipr.fabric.hal.conf /etc/dbus-1/system.d
+
+echo "Starting the dbus server"
+nohup python /tmp/dbus_service.py >/dev/null 2>&1 &
+
+echo "Install nsenter"
+apt-get install nsenter -y
 
 #create the seeds file
 echo "Creating Seeds File"
@@ -32,26 +56,38 @@ printf '%s' $1 > seeds
 echo "Creating The network.json File"
 hn=$(hostname)
 ip=$(/sbin/ifconfig eth0 | grep 'inet addr:' | cut -d: -f2 | awk '{ print $1}')
-printf '{"private_interface_name":"cbr0","public_interface_name":"eth0","hostname":"%s","public_ip":"%s"}' $hn $ip > network.json
+printf '{"private_interface_name":"eth0","public_interface_name":"eth0","hostname":"%s","public_ip":"%s"}' $hn $ip > network.json
 
 #create some folders, set permissions, and format the attached volume
 echo "Creating /ecs/uuid-1 folder"
 mkdir -p /ecs/uuid-1
 
+echo "Formatting attached volume as XFS"
+mkfs.xfs /dev/$VOL
+
+echo "Mounting attached XFS volume to /ecs/uuid-1"
+mount /dev/$VOL /ecs/uuid-1
+
+echo "Adding /dev/$VOL mount to /etc/fstab"
+echo "/dev/$VOL /ecs/uuid-1 xfs defaults 0 0" >> /etc/fstab
+
+echo "Mounting /ecs/uuid-1"
+mount -a
+
 echo "Creating symlink"
 ln -s /bin/grep /usr/bin/grep
 
-#echo "Downloading additional_prep.sh"
-#curl -O https://raw.githubusercontent.com/emccode/ecs-dockerswarm/master/additional_prep.sh
+echo "Downloading additional_prep.sh"
+curl -O https://raw.githubusercontent.com/emccode/ecs-dockerswarm/master/additional_prep.sh
 
-#echo "Changing additional_prep.sh Permissions"
-#chmod 777 additional_prep.sh
+echo "Changing additional_prep.sh Permissions"
+chmod 777 additional_prep.sh
 
-#echo "Starting the additional prep on attached volume"
-#./additional_prep.sh /dev/$VOL
+echo "Starting the additional prep on attached volume"
+./additional_prep.sh /dev/$VOL
 
-#echo "Changing /ecs Permissions"
-#chown -R 444 /ecs
+echo "Changing /ecs Permissions"
+chown -R 444:444 /ecs
 
 echo "Creating /host/data folder"
 mkdir -p /host/data
@@ -60,20 +96,21 @@ mkdir -p /host/files
 
 echo "Copying network.json to /host/data"
 cp network.json /host/data
-rm -f network.json
+rm network.json
 echo 'Copying seeds to /host/files'
 cp seeds /host/files
-rm -f seeds
+rm seeds
 
 echo "Changing /host Permissions"
-chown -R 444 /host	
+chown -R 444:444 /host	
 
 echo "Creating /var/log/vipr/emcvipr-object folder"
 mkdir -p /var/log/vipr/emcvipr-object
 echo "Changing /var/log/vipr/emcvipr-object Permissions"
-chown 444 /var/log/vipr/emcvipr-object
+chown 444:444 /var/log/vipr/emcvipr-object
 echo "Creating /data folder"
 mkdir /data
 echo "Changing /data Permissions"
-chown 444 /data
+chown 444:444 /data
 echo "Host has been successfully prepared"
+exit

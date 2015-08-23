@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ecs
-          image: emccorp/ecs-software
+          image: emccorp/ecs-reduced-footprint
           volumeMounts:
             - mountPath: "/host"
               name: host
@@ -23,9 +23,15 @@ spec:
               name: data
             - mountPath: "/opt/storageos/logs"
               name: log
+            - mountPath: "/vagrant"
+              name: vagrant
+            - mountPath: "/dae"
+              name: dae
+            - mountPath: "/var/run/dbus"
+              name: dbus
 
           ports:
-            - containerPort: 6379
+          - containerPort: 4443
 
       volumes:
           - name: host 
@@ -39,4 +45,16 @@ spec:
           - name: data 
             hostPath:
                 path: "/data"
+
+
+          - name: vagrant 
+            hostPath:
+                path: "/vagrant"
     
+          - name: dae
+            hostPath:
+                path: "/ecs"
+
+          - name: dbus
+            hostPath:
+                path: "/var/run/dbus"
