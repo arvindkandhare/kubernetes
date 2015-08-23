@@ -27,7 +27,8 @@ ENV TMPDIR /tmp.k8s
 
 # Get the code coverage tool and godep
 RUN mkdir $TMPDIR && \
-    go get golang.org/x/tools/cmd/cover github.com/tools/godep
+    go get golang.org/x/tools/cmd/cover 
+#github.com/tools/godep
 
 # We use rsync to copy some binaries around.  It is faster (0.3s vs. 1.1s) on my
 # machine vs. `install`

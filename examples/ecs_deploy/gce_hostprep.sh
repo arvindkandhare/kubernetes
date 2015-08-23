@@ -43,7 +43,7 @@ apt-get install python-gobject -y
 cp /tmp/com.emc.vipr.fabric.hal.conf /etc/dbus-1/system.d
 
 echo "Starting the dbus server"
-nohup python /tmp/dbus_service.py >/dev/null 2>&1 &
+nohup python /tmp/dbus_service.py < /dev/null >/dev/null 2>&1 &
 
 echo "Install nsenter"
 apt-get install nsenter -y

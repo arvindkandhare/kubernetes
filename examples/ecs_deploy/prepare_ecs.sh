@@ -22,7 +22,7 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
  gcloud compute copy-files ./examples/ecs_deploy/dbus_service.py $hostname:/tmp/ --zone $zonename
 
  gcloud compute copy-files ./examples/ecs_deploy/gce_hostprep.sh $hostname:/tmp/ --zone $zonename
- gcloud compute ssh -n $hostname  "sudo /tmp/gce_hostprep.sh $IPLIST sdb" --zone $zonename 
+ gcloud compute ssh  $hostname  "sudo /tmp/gce_hostprep.sh $IPLIST sdb" --zone $zonename 
 
 
 done
