@@ -34,6 +34,7 @@ var _ = Describe("Autoscaling", func() {
 	f := NewFramework("autoscaling")
 	var nodeCount int
 	var coresPerNode int
+	var memCapacityMb int
 
 	BeforeEach(func() {
 		SkipUnlessProviderIs("gce")
@@ -42,15 +43,17 @@ var _ = Describe("Autoscaling", func() {
 		expectNoError(err)
 		nodeCount = len(nodes.Items)
 		Expect(nodeCount).NotTo(BeZero())
-		res := nodes.Items[0].Status.Capacity[api.ResourceCPU]
-		coresPerNode = int((&res).MilliValue() / 1000)
+		cpu := nodes.Items[0].Status.Capacity[api.ResourceCPU]
+		mem := nodes.Items[0].Status.Capacity[api.ResourceMemory]
+		coresPerNode = int((&cpu).MilliValue() / 1000)
+		memCapacityMb = int((&mem).Value() / 1024 / 1024)
 	})
 
 	AfterEach(func() {
 		cleanUpAutoscaler()
 	})
 
-	It("[Autoscaling] should scale cluster size based on cpu utilization", func() {
+	It("[Skipped][Autoscaling Suite] should scale cluster size based on cpu utilization", func() {
 		setUpAutoscaler("cpu/node_utilization", 0.7, nodeCount, nodeCount+1)
 
 		ConsumeCpu(f, "cpu-utilization", nodeCount*coresPerNode)
@@ -70,14 +73,16 @@ var _ = Describe("Autoscaling", func() {
 		expectNoError(waitForClusterSize(f.Client, 1, 20*time.Minute))
 	})
 
-	It("[Skipped] should scale cluster size based on memory utilization", func() {
-		setUpAutoscaler("memory/node_utilization", 0.5, 1, 10)
+	It("[Skipped][Autoscaling Suite] should scale cluster size based on memory utilization", func() {
+		setUpAutoscaler("memory/node_utilization", 0.5, nodeCount, nodeCount+1)
 
-		ConsumeMemory(f, "memory-utilization", 2)
-		expectNoError(waitForClusterSize(f.Client, 2, 20*time.Minute))
+		// Consume 60% of total memory capacity in 256MB chunks.
+		chunks := memCapacityMb * nodeCount * 6 / 10 / 256
+		ConsumeMemory(f, "memory-utilization", chunks)
+		expectNoError(waitForClusterSize(f.Client, nodeCount+1, 20*time.Minute))
 
 		StopConsuming(f, "memory-utilization")
-		expectNoError(waitForClusterSize(f.Client, 1, 20*time.Minute))
+		expectNoError(waitForClusterSize(f.Client, nodeCount, 20*time.Minute))
 	})
 
 	It("[Skipped] should scale cluster size based on memory reservation", func() {
@@ -152,16 +157,18 @@ func ConsumeCpu(f *Framework, id string, cores int) {
 	expectNoError(RunRC(*config))
 }
 
-func ConsumeMemory(f *Framework, id string, gigabytes int) {
-	By(fmt.Sprintf("Running RC which consumes %v GB of memory", gigabytes))
+// Consume <chunks> chunks of size 256MB.
+func ConsumeMemory(f *Framework, id string, chunks int) {
+	CreateService(f, id)
+	By(fmt.Sprintf("Running RC which consumes %v MB of memory in 256MB chunks", chunks*256))
 	config := &RCConfig{
 		Client:    f.Client,
 		Name:      id,
 		Namespace: f.Namespace.Name,
 		Timeout:   10 * time.Minute,
 		Image:     "jess/stress",
-		Command:   []string{"stress", "-m", "1"},
-		Replicas:  4 * gigabytes,
+		Command:   []string{"stress", "-m", "1", "--vm-hang", "0"},
+		Replicas:  chunks,
 	}
 	expectNoError(RunRC(*config))
 }

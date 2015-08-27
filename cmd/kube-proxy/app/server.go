@@ -19,6 +19,7 @@ limitations under the License.
 package app
 
 import (
+	"errors"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
@@ -61,6 +62,8 @@ type ProxyServer struct {
 	ForceUserspaceProxy bool
 	SyncPeriod          time.Duration
 	nodeRef             *api.ObjectReference // Reference to this node.
+	MasqueradeAll       bool
+	CleanupAndExit      bool
 }
 
 // NewProxyServer creates a new ProxyServer object with default parameters
@@ -88,10 +91,29 @@ func (s *ProxyServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.HostnameOverride, "hostname-override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.BoolVar(&s.ForceUserspaceProxy, "legacy-userspace-proxy", true, "Use the legacy userspace proxy (instead of the pure iptables proxy).")
 	fs.DurationVar(&s.SyncPeriod, "iptables-sync-period", 5*time.Second, "How often iptables rules are refreshed (e.g. '5s', '1m', '2h22m').  Must be greater than 0.")
+	fs.BoolVar(&s.MasqueradeAll, "masquerade-all", false, "If using the pure iptables proxy, SNAT everything")
+	fs.BoolVar(&s.CleanupAndExit, "cleanup-iptables", false, "If true cleanup iptables rules and exit.")
 }
 
-// Run runs the specified ProxyServer.  This should never exit.
+// Run runs the specified ProxyServer.  This should never exit (unless CleanupAndExit is set).
 func (s *ProxyServer) Run(_ []string) error {
+	protocol := utiliptables.ProtocolIpv4
+	if s.BindAddress.To4() == nil {
+		protocol = utiliptables.ProtocolIpv6
+	}
+
+	// remove iptables rules and exit
+	if s.CleanupAndExit {
+		execer := exec.New()
+		ipt := utiliptables.New(execer, protocol)
+		encounteredError := userspace.CleanupLeftovers(ipt)
+		encounteredError = iptables.CleanupLeftovers(ipt) || encounteredError
+		if encounteredError {
+			return errors.New("Encountered an error while tearing down rules.")
+		}
+		return nil
+	}
+
 	// TODO(vmarmol): Use container config for this.
 	oomAdjuster := oom.NewOomAdjuster()
 	if err := oomAdjuster.ApplyOomScoreAdj(0, s.OOMScoreAdj); err != nil {
@@ -143,11 +165,6 @@ func (s *ProxyServer) Run(_ []string) error {
 	serviceConfig := config.NewServiceConfig()
 	endpointsConfig := config.NewEndpointsConfig()
 
-	protocol := utiliptables.ProtocolIpv4
-	if s.BindAddress.To4() == nil {
-		protocol = utiliptables.ProtocolIpv6
-	}
-
 	var proxier proxy.ProxyProvider
 	var endpointsHandler config.EndpointsConfigHandler
 
@@ -160,12 +177,17 @@ func (s *ProxyServer) Run(_ []string) error {
 		glog.V(2).Info("Using iptables Proxier.")
 
 		execer := exec.New()
-		proxierIptables, err := iptables.NewProxier(utiliptables.New(execer, protocol), execer, s.SyncPeriod)
+		ipt := utiliptables.New(execer, protocol)
+		proxierIptables, err := iptables.NewProxier(ipt, execer, s.SyncPeriod, s.MasqueradeAll)
 		if err != nil {
 			glog.Fatalf("Unable to create proxier: %v", err)
 		}
 		proxier = proxierIptables
 		endpointsHandler = proxierIptables
+		// No turning back. Remove artifacts that might still exist from the userspace Proxier.
+		glog.V(2).Info("Tearing down userspace rules. Errors here are acceptable.")
+		userspace.CleanupLeftovers(ipt)
+
 	} else {
 		glog.V(2).Info("Using userspace Proxier.")
 		// This is a proxy.LoadBalancer which NewProxier needs but has methods we don't need for
@@ -174,11 +196,16 @@ func (s *ProxyServer) Run(_ []string) error {
 		// set EndpointsConfigHandler to our loadBalancer
 		endpointsHandler = loadBalancer
 
-		proxierUserspace, err := userspace.NewProxier(loadBalancer, s.BindAddress, utiliptables.New(exec.New(), protocol), s.PortRange, s.SyncPeriod)
+		execer := exec.New()
+		ipt := utiliptables.New(execer, protocol)
+		proxierUserspace, err := userspace.NewProxier(loadBalancer, s.BindAddress, ipt, s.PortRange, s.SyncPeriod)
 		if err != nil {
 			glog.Fatalf("Unable to create proxer: %v", err)
 		}
 		proxier = proxierUserspace
+		// Remove artifacts from the pure-iptables Proxier.
+		glog.V(2).Info("Tearing down pure-iptables proxy rules. Errors here are acceptable.")
+		iptables.CleanupLeftovers(ipt)
 	}
 
 	// Wire proxier to handle changes to services
@@ -198,12 +225,12 @@ func (s *ProxyServer) Run(_ []string) error {
 	)
 
 	if s.HealthzPort > 0 {
-		go util.Forever(func() {
+		go util.Until(func() {
 			err := http.ListenAndServe(s.HealthzBindAddress.String()+":"+strconv.Itoa(s.HealthzPort), nil)
 			if err != nil {
 				glog.Errorf("Starting health server failed: %v", err)
 			}
-		}, 5*time.Second)
+		}, 5*time.Second, util.NeverStop)
 	}
 
 	// Just loop forever for now...

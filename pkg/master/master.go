@@ -71,6 +71,7 @@ import (
 	serviceetcd "k8s.io/kubernetes/pkg/registry/service/etcd"
 	ipallocator "k8s.io/kubernetes/pkg/registry/service/ipallocator"
 	serviceaccountetcd "k8s.io/kubernetes/pkg/registry/serviceaccount/etcd"
+	thirdpartyresourceetcd "k8s.io/kubernetes/pkg/registry/thirdpartyresource/etcd"
 	"k8s.io/kubernetes/pkg/storage"
 	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
 	"k8s.io/kubernetes/pkg/tools"
@@ -286,7 +287,7 @@ func setDefaults(c *Config) {
 	if c.CacheTimeout == 0 {
 		c.CacheTimeout = 5 * time.Second
 	}
-	for c.PublicAddress == nil || c.PublicAddress.IsUnspecified() {
+	for c.PublicAddress == nil || c.PublicAddress.IsUnspecified() || c.PublicAddress.IsLoopback() {
 		// TODO: This should be done in the caller and just require a
 		// valid value to be passed in.
 		hostIP, err := util.ChooseHostInterface()
@@ -428,31 +429,32 @@ func logStackOnRecover(panicReason interface{}, httpWriter http.ResponseWriter) 
 
 // init initializes master.
 func (m *Master) init(c *Config) {
+	enableCacher := true
 	healthzChecks := []healthz.HealthzChecker{}
 	m.clock = util.RealClock{}
-	podStorage := podetcd.NewStorage(c.DatabaseStorage, c.KubeletClient)
+	podStorage := podetcd.NewStorage(c.DatabaseStorage, enableCacher, c.KubeletClient)
 
 	podTemplateStorage := podtemplateetcd.NewREST(c.DatabaseStorage)
 
-	eventStorage := eventetcd.NewStorage(c.DatabaseStorage, uint64(c.EventTTL.Seconds()))
-	limitRangeStorage := limitrangeetcd.NewStorage(c.DatabaseStorage)
+	eventStorage := eventetcd.NewREST(c.DatabaseStorage, uint64(c.EventTTL.Seconds()))
+	limitRangeStorage := limitrangeetcd.NewREST(c.DatabaseStorage)
 
-	resourceQuotaStorage, resourceQuotaStatusStorage := resourcequotaetcd.NewStorage(c.DatabaseStorage)
-	secretStorage := secretetcd.NewStorage(c.DatabaseStorage)
-	serviceAccountStorage := serviceaccountetcd.NewStorage(c.DatabaseStorage)
-	persistentVolumeStorage, persistentVolumeStatusStorage := pvetcd.NewStorage(c.DatabaseStorage)
-	persistentVolumeClaimStorage, persistentVolumeClaimStatusStorage := pvcetcd.NewStorage(c.DatabaseStorage)
+	resourceQuotaStorage, resourceQuotaStatusStorage := resourcequotaetcd.NewREST(c.DatabaseStorage)
+	secretStorage := secretetcd.NewREST(c.DatabaseStorage)
+	serviceAccountStorage := serviceaccountetcd.NewREST(c.DatabaseStorage)
+	persistentVolumeStorage, persistentVolumeStatusStorage := pvetcd.NewREST(c.DatabaseStorage)
+	persistentVolumeClaimStorage, persistentVolumeClaimStatusStorage := pvcetcd.NewREST(c.DatabaseStorage)
 
-	namespaceStorage, namespaceStatusStorage, namespaceFinalizeStorage := namespaceetcd.NewStorage(c.DatabaseStorage)
+	namespaceStorage, namespaceStatusStorage, namespaceFinalizeStorage := namespaceetcd.NewREST(c.DatabaseStorage)
 	m.namespaceRegistry = namespace.NewRegistry(namespaceStorage)
 
-	endpointsStorage := endpointsetcd.NewStorage(c.DatabaseStorage)
+	endpointsStorage := endpointsetcd.NewREST(c.DatabaseStorage, enableCacher)
 	m.endpointRegistry = endpoint.NewRegistry(endpointsStorage)
 
-	nodeStorage, nodeStatusStorage := nodeetcd.NewStorage(c.DatabaseStorage, c.KubeletClient)
+	nodeStorage, nodeStatusStorage := nodeetcd.NewREST(c.DatabaseStorage, enableCacher, c.KubeletClient)
 	m.nodeRegistry = minion.NewRegistry(nodeStorage)
 
-	serviceStorage := serviceetcd.NewStorage(c.DatabaseStorage)
+	serviceStorage := serviceetcd.NewREST(c.DatabaseStorage)
 	m.serviceRegistry = service.NewRegistry(serviceStorage)
 
 	var serviceClusterIPRegistry service.RangeRegistry
@@ -779,13 +781,15 @@ func (m *Master) api_v1() *apiserver.APIGroupVersion {
 
 // expapi returns the resources and codec for the experimental api
 func (m *Master) expapi(c *Config) *apiserver.APIGroupVersion {
-	controllerStorage := expcontrolleretcd.NewStorage(c.DatabaseStorage)
-	autoscalerStorage := horizontalpodautoscaleretcd.NewREST(c.DatabaseStorage)
+	controllerStorage := expcontrolleretcd.NewStorage(c.ExpDatabaseStorage)
+	autoscalerStorage := horizontalpodautoscaleretcd.NewREST(c.ExpDatabaseStorage)
+	thirdPartyResourceStorage := thirdpartyresourceetcd.NewREST(c.ExpDatabaseStorage)
 
 	storage := map[string]rest.Storage{
 		strings.ToLower("replicationControllers"):       controllerStorage.ReplicationController,
 		strings.ToLower("replicationControllers/scale"): controllerStorage.Scale,
 		strings.ToLower("horizontalpodautoscalers"):     autoscalerStorage,
+		"thirdpartyresources":                           thirdPartyResourceStorage,
 	}
 
 	return &apiserver.APIGroupVersion{

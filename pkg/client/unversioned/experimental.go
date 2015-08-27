@@ -32,6 +32,8 @@ import (
 // incompatible ways at any time.
 type ExperimentalInterface interface {
 	VersionInterface
+	HorizontalPodAutoscalersNamespacer
+	ScaleNamespacer
 }
 
 // ExperimentalClient is used to interact with experimental Kubernetes features.
@@ -68,6 +70,14 @@ func (c *ExperimentalClient) ServerAPIVersions() (*api.APIVersions, error) {
 		return nil, fmt.Errorf("got '%s': %v", string(body), err)
 	}
 	return &v, nil
+}
+
+func (c *ExperimentalClient) HorizontalPodAutoscalers(namespace string) HorizontalPodAutoscalerInterface {
+	return newHorizontalPodAutoscalers(c, namespace)
+}
+
+func (c *ExperimentalClient) Scales(namespace string) ScaleInterface {
+	return newScales(c, namespace)
 }
 
 // NewExperimental creates a new ExperimentalClient for the given config. This client

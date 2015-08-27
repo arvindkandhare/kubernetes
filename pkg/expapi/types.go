@@ -98,17 +98,17 @@ type HorizontalPodAutoscalerSpec struct {
 // HorizontalPodAutoscalerStatus contains the current status of a horizontal pod autoscaler
 type HorizontalPodAutoscalerStatus struct {
 	// CurrentReplicas is the number of replicas of pods managed by this autoscaler.
-	CurrentReplicas int `json:"replicas"`
+	CurrentReplicas int `json:"currentReplicas"`
 
 	// DesiredReplicas is the desired number of replicas of pods managed by this autoscaler.
 	// The number may be different because pod downscaling is someteimes delayed to keep the number
 	// of pods stable.
-	DesiredReplicas int `json:"replicas"`
+	DesiredReplicas int `json:"desiredReplicas"`
 
 	// CurrentConsumption is the current average consumption of the given resource that the autoscaler will
 	// try to maintain by adjusting the desired number of pods.
 	// Two types of resources are supported: "cpu" and "memory".
-	CurrentConsumption ResourceConsumption `json:"currentConsumption"`
+	CurrentConsumption *ResourceConsumption `json:"currentConsumption"`
 
 	// LastScaleTimestamp is the last time the HorizontalPodAutoscaler scaled the number of pods.
 	// This is used by the autoscaler to controll how often the number of pods is changed.
@@ -124,7 +124,7 @@ type HorizontalPodAutoscaler struct {
 	Spec HorizontalPodAutoscalerSpec `json:"spec,omitempty"`
 
 	// Status represents the current information about the autoscaler.
-	Status HorizontalPodAutoscalerStatus `json:"status,omitempty"`
+	Status *HorizontalPodAutoscalerStatus `json:"status,omitempty"`
 }
 
 // HorizontalPodAutoscaler is a collection of pod autoscalers.
@@ -133,4 +133,141 @@ type HorizontalPodAutoscalerList struct {
 	api.ListMeta `json:"metadata,omitempty"`
 
 	Items []HorizontalPodAutoscaler `json:"items"`
+}
+
+// A ThirdPartyResource is a generic representation of a resource, it is used by add-ons and plugins to add new resource
+// types to the API.  It consists of one or more Versions of the api.
+type ThirdPartyResource struct {
+	api.TypeMeta   `json:",inline"`
+	api.ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+
+	Description string `json:"description,omitempty" description:"The description of this object"`
+
+	Versions []APIVersion `json:"versions,omitempty" description:"The versions for this third party object"`
+}
+
+type ThirdPartyResourceList struct {
+	api.TypeMeta `json:",inline"`
+	api.ListMeta `json:"metadata,omitempty" description:"standard list metadata; see http://docs.k8s.io/api-conventions.md#metadata"`
+
+	Items []ThirdPartyResource `json:"items" description:"items is a list of schema objects"`
+}
+
+// An APIVersion represents a single concrete version of an object model.
+type APIVersion struct {
+	Name     string `json:"name,omitempty" description:"name of this version (e.g. 'v1')"`
+	APIGroup string `json:"apiGroup,omitempty" description:"The API group to add this object into, default 'experimental'"`
+}
+
+// An internal object, used for versioned storage in etcd.  Not exposed to the end user.
+type ThirdPartyResourceData struct {
+	api.TypeMeta   `json:",inline"`
+	api.ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+
+	Data []byte `json:"name,omitempty" description:"the raw JSON data for this data"`
+}
+
+type Deployment struct {
+	api.TypeMeta   `json:",inline"`
+	api.ObjectMeta `json:"metadata,omitempty"`
+
+	// Specification of the desired behavior of the Deployment.
+	Spec DeploymentSpec `json:"spec,omitempty"`
+
+	// Most recently observed status of the Deployment.
+	Status DeploymentStatus `json:"status,omitempty"`
+}
+
+type DeploymentSpec struct {
+	// Number of desired pods. This is a pointer to distinguish between explicit
+	// zero and not specified. Defaults to 1.
+	Replicas *int `json:"replicas,omitempty"`
+
+	// Label selector for pods. Existing ReplicationControllers whose pods are
+	// selected by this will be scaled down.
+	Selector map[string]string `json:"selector,omitempty"`
+
+	// Describes the pods that will be created.
+	Template *api.PodTemplateSpec `json:"template,omitempty"`
+
+	// The deployment strategy to use to replace existing pods with new ones.
+	Strategy DeploymentStrategy `json:"strategy,omitempty"`
+
+	// Key of the selector that is added to existing RCs (and label key that is
+	// added to its pods) to prevent the existing RCs to select new pods (and old
+	// pods being selected by new RC).
+	// Users can set this to an empty string to indicate that the system should
+	// not add any selector and label. If unspecified, system uses
+	// "deployment.kubernetes.io/podTemplateHash".
+	// Value of this key is hash of DeploymentSpec.PodTemplateSpec.
+	UniqueLabelKey *string `json:"uniqueLabel,omitempty"`
+}
+
+type DeploymentStrategy struct {
+	// Type of deployment. Can be "Recreate" or "RollingUpdate". Defaults to RollingUpdate.
+	Type DeploymentType `json:"type,omitempty"`
+
+	// TODO: Update this to follow our convention for oneOf, whatever we decide it
+	// to be.
+	// Rolling update config params. Present only if DeploymentType =
+	// RollingUpdate.
+	RollingUpdate *RollingUpdateDeployment `json:"rollingUpdate,omitempty"`
+}
+
+type DeploymentType string
+
+const (
+	// Kill all existing pods before creating new ones.
+	DeploymentRecreate DeploymentType = "Recreate"
+
+	// Replace the old RCs by new one using rolling update i.e gradually scale down the old RCs and scale up the new one.
+	DeploymentRollingUpdate DeploymentType = "RollingUpdate"
+)
+
+// Spec to control the desired behavior of rolling update.
+type RollingUpdateDeployment struct {
+	// The maximum number of pods that can be unavailable during the update.
+	// Value can be an absolute number (ex: 5) or a percentage of total pods at the start of update (ex: 10%).
+	// Absolute number is calculated from percentage by rounding up.
+	// This can not be 0 if MaxSurge is 0.
+	// By default, a fixed value of 1 is used.
+	// Example: when this is set to 30%, the old RC can be scaled down by 30%
+	// immediately when the rolling update starts. Once new pods are ready, old RC
+	// can be scaled down further, followed by scaling up the new RC, ensuring
+	// that at least 70% of original number of pods are available at all times
+	// during the update.
+	MaxUnavailable util.IntOrString `json:"maxUnavailable,omitempty"`
+
+	// The maximum number of pods that can be scheduled above the original number of
+	// pods.
+	// Value can be an absolute number (ex: 5) or a percentage of total pods at
+	// the start of the update (ex: 10%). This can not be 0 if MaxUnavailable is 0.
+	// Absolute number is calculated from percentage by rounding up.
+	// By default, a value of 1 is used.
+	// Example: when this is set to 30%, the new RC can be scaled up by 30%
+	// immediately when the rolling update starts. Once old pods have been killed,
+	// new RC can be scaled up further, ensuring that total number of pods running
+	// at any time during the update is atmost 130% of original pods.
+	MaxSurge util.IntOrString `json:"maxSurge,omitempty"`
+
+	// Minimum number of seconds for which a newly created pod should be ready
+	// without any of its container crashing, for it to be considered available.
+	// Defaults to 0 (pod will be considered available as soon as it is ready)
+	MinReadySeconds int `json:"minReadySeconds,omitempty"`
+}
+
+type DeploymentStatus struct {
+	// Total number of ready pods targeted by this deployment (this
+	// includes both the old and new pods).
+	Replicas int `json:"replicas,omitempty"`
+
+	// Total number of new ready pods with the desired template spec.
+	UpdatedReplicas int `json:"updatedReplicas,omitempty"`
+}
+
+type DeploymentList struct {
+	api.TypeMeta `json:",inline"`
+	api.ListMeta `json:"metadata,omitempty"`
+
+	Items []Deployment `json:"items"`
 }

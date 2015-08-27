@@ -43,12 +43,12 @@ as recommended by the Kubernetes project.  Your cluster administrator may have
 customized the behavior in your cluster, in which case this documentation may
 not apply.*
 
-When you (a human) access the cluster (e.g. using kubectl), you are
+When you (a human) access the cluster (e.g. using `kubectl`), you are
 authenticated by the apiserver as a particular User Account (currently this is
-usually "admin", unless your cluster administrator has customized your
+usually `admin`, unless your cluster administrator has customized your
 cluster).  Processes in containers inside pods can also contact the apiserver.
 When they do, they are authenticated as a particular Service Account (e.g.
-"default").
+`default`).
 
 ## Using the Default Service Account to access the API server.
 
@@ -63,7 +63,7 @@ You can access the API using a proxy or with a client library, as described in
 
 ## Using Multiple Service Accounts.
 
-Every namespace has a default service account resource called "default".
+Every namespace has a default service account resource called `default`.
 You can list this and any other serviceAccount resources in the namespace with this command:
 
 ```console
@@ -159,6 +159,62 @@ token:
 ```
 
 > Note that the content of `token` is elided here.
+
+## Adding ImagePullSecrets to a service account
+
+First, create an imagePullSecret, as described [here](images.md#specifying-imagepullsecrets-on-a-pod)
+Next, verify it has been created.  For example:
+
+```console
+$ kubectl get secrets myregistrykey
+NAME             TYPE                      DATA
+myregistrykey    kubernetes.io/dockercfg   1
+```
+
+Next, read/modify/write the service account for the namespace to use this secret as an imagePullSecret
+
+```console
+$ kubectl get serviceaccounts default -o yaml > ./sa.yaml
+$ cat sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  creationTimestamp: 2015-08-07T22:02:39Z
+  name: default
+  namespace: default
+  resourceVersion: "243024"
+  selfLink: /api/v1/namespaces/default/serviceaccounts/default
+  uid: 052fb0f4-3d50-11e5-b066-42010af0d7b6
+secrets:
+- name: default-token-uudge
+$ vi sa.yaml
+[editor session not shown]
+[delete line with key "resourceVersion"]
+[add lines with "imagePullSecret:"]
+$ cat sa.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  creationTimestamp: 2015-08-07T22:02:39Z
+  name: default
+  namespace: default
+  selfLink: /api/v1/namespaces/default/serviceaccounts/default
+  uid: 052fb0f4-3d50-11e5-b066-42010af0d7b6
+secrets:
+- name: default-token-uudge
+imagePullSecrets:
+- name: myregistrykey
+$ kubectl replace serviceaccount default -f ./sa.yaml
+serviceaccounts/default
+```
+
+Now, any new pods created in the current namespace will have this added to their spec:
+
+```yaml
+spec:
+  imagePullSecrets:
+  - name: myregistrykey
+```
 
 ## Adding Secrets to a service account.
 

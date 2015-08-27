@@ -80,13 +80,15 @@ if [[ "${KUBERNETES_PROVIDER}" == "aws" ]]; then
     : ${NUM_MINIONS:="100"}
     : ${GINKGO_TEST_ARGS:="--ginkgo.focus=\[Performance\ssuite\]"}
   else
-    : ${MASTER_SIZE:="t2.small"}
-    : ${NUM_MINIONS:="2"}
+    : ${MASTER_SIZE:="m3.large"}
+    : ${MINION_SIZE:="m3.large"}
+    : ${NUM_MINIONS:="3"}
   fi
 fi
 
 # Specialized tests which should be skipped by default for projects.
 GCE_DEFAULT_SKIP_TESTS=(
+    "Autoscaling\sSuite"
     "Skipped"
     "Reboot"
     "Restart"
@@ -96,15 +98,14 @@ GCE_DEFAULT_SKIP_TESTS=(
 # The following tests are known to be flaky, and are thus run only in their own
 # -flaky- build variants.
 GCE_FLAKY_TESTS=(
-    "Autoscaling"
     "DaemonRestart"
     "ResourceUsage"
+    "monotonically\sincreasing\srestart\scount"
     )
 
 # Tests which are not able to be run in parallel.
 GCE_PARALLEL_SKIP_TESTS=(
     ${GCE_DEFAULT_SKIP_TESTS[@]:+${GCE_DEFAULT_SKIP_TESTS[@]}}
-    "Autoscaling"
     "Etcd"
     "NetworkingNew"
     "Nodes\sNetwork"
@@ -131,7 +132,6 @@ GCE_PARALLEL_FLAKY_TESTS=(
 
 # Tests that should not run on soak cluster.
 GCE_SOAK_CONTINUOUS_SKIP_TESTS=(
-    "Autoscaling"
     "Density.*30\spods"
     "Elasticsearch"
     "Etcd.*SIGKILL"
@@ -147,7 +147,6 @@ GCE_SOAK_CONTINUOUS_SKIP_TESTS=(
     )
 
 GCE_RELEASE_SKIP_TESTS=(
-    "Autoscaling"
     )
 
 # Define environment variables based on the Jenkins project name.
@@ -163,8 +162,6 @@ case ${JOB_NAME} in
           )"}
     : ${KUBE_GCE_INSTANCE_PREFIX="e2e-gce"}
     : ${PROJECT:="k8s-jkns-e2e-gce"}
-    # Override GCE default for cluster size autoscaling purposes.
-    ENABLE_CLUSTER_MONITORING="googleinfluxdb"
     ;;
 
   # Runs only the examples tests on GCE.
@@ -175,6 +172,18 @@ case ${JOB_NAME} in
     : ${GINKGO_TEST_ARGS:="--ginkgo.focus=Example"}
     : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-examples"}
     : ${PROJECT:="kubernetes-jenkins"}
+    ;;
+
+  # Runs only the autoscaling tests on GCE.
+  kubernetes-e2e-gce-autoscaling)
+    : ${E2E_CLUSTER_NAME:="jenkins-gce-e2e-autoscaling"}
+    : ${E2E_DOWN:="false"}
+    : ${E2E_NETWORK:="e2e-autoscaling"}
+    : ${GINKGO_TEST_ARGS:="--ginkgo.focus=Autoscaling\sSuite"}
+    : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-autoscaling"}
+    : ${PROJECT:="k8s-jnks-e2e-gce-autoscaling"}
+    # Override GCE default for cluster size autoscaling purposes.
+    ENABLE_CLUSTER_MONITORING="googleinfluxdb"
     ;;
 
   # Runs the flaky tests on GCE, sequentially.
@@ -189,8 +198,6 @@ case ${JOB_NAME} in
           )"}
     : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-flaky"}
     : ${PROJECT:="k8s-jkns-e2e-gce-flaky"}
-    # Override GCE default for cluster size autoscaling purposes.
-    ENABLE_CLUSTER_MONITORING="googleinfluxdb"
     ;;
 
   # Runs all non-flaky tests on GCE in parallel.
@@ -206,6 +213,20 @@ case ${JOB_NAME} in
     : ${KUBE_GCE_INSTANCE_PREFIX:="e2e-test-parallel"}
     : ${PROJECT:="kubernetes-jenkins"}
     # Override GCE defaults.
+    NUM_MINIONS="6"
+    ;;
+
+  # Runs all non-flaky tests on AWS in parallel.
+  kubernetes-e2e-aws-parallel)
+    : ${E2E_CLUSTER_NAME:="jenkins-aws-e2e-parallel"}
+    : ${E2E_NETWORK:="e2e-parallel"}
+    : ${GINKGO_PARALLEL:="y"}
+    : ${GINKGO_TEST_ARGS:="--ginkgo.skip=$(join_regex_allow_empty \
+          ${GCE_DEFAULT_SKIP_TESTS[@]:+${GCE_DEFAULT_SKIP_TESTS[@]}} \
+          ${GCE_PARALLEL_SKIP_TESTS[@]:+${GCE_PARALLEL_SKIP_TESTS[@]}} \
+          ${GCE_PARALLEL_FLAKY_TESTS[@]:+${GCE_PARALLEL_FLAKY_TESTS[@]}} \
+          )"}
+    # Override AWS defaults.
     NUM_MINIONS="6"
     ;;
 
@@ -248,6 +269,8 @@ case ${JOB_NAME} in
     MINION_SIZE="n1-standard-2"
     MINION_DISK_SIZE="50GB"
     NUM_MINIONS="100"
+    # Reduce logs verbosity
+    TEST_CLUSTER_LOG_LEVEL="--v=1"
     ;;
 
   # Runs tests on GCE soak cluster.
@@ -278,10 +301,6 @@ case ${JOB_NAME} in
     : ${KUBE_GCE_INSTANCE_PREFIX:="pull-e2e-${EXECUTOR_NUMBER}"}
     : ${KUBE_GCS_STAGING_PATH_SUFFIX:="-${EXECUTOR_NUMBER}"}
     : ${PROJECT:="kubernetes-jenkins-pull"}
-    # Override GCE defaults.
-    MASTER_SIZE="n1-standard-1"
-    MINION_SIZE="n1-standard-1"
-    NUM_MINIONS="2"
     ;;
 
   # Runs non-flaky tests on GCE on the release-latest branch,

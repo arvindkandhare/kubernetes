@@ -31,6 +31,7 @@ certificate-authority
 cgroup-prefix
 cgroup-root
 chaos-chance
+cleanup-iptables
 client-ca-file
 client-certificate
 client-key
@@ -51,6 +52,7 @@ current-release-pr
 current-replicas
 default-container-cpu-limit
 default-container-mem-limit
+delay-shutdown
 deleting-pods-burst
 deleting-pods-qps
 deployment-label-key
@@ -77,6 +79,7 @@ executor-suicide-timeout
 experimental-keystone-url
 experimental-prefix
 external-hostname
+external-ip
 failover-timeout
 file-check-frequency
 file-suffix
@@ -125,10 +128,12 @@ kube-master
 label-columns
 last-release-pr
 legacy-userspace-proxy
+log-flush-frequency
 long-running-request-regexp
 low-diskspace-threshold-mb
 manifest-url
 manifest-url-header
+masquerade-all
 master-service-namespace
 max-concurrency
 max-connection-bytes-per-sec
@@ -164,6 +169,10 @@ node-status-update-frequency
 node-sync-period
 no-headers
 num-nodes
+oidc-ca-file
+oidc-client-id
+oidc-issuer-url
+oidc-username-claim
 oom-score-adj
 output-version
 out-version
@@ -179,7 +188,6 @@ proxy-bindall
 proxy-logv
 proxy-port-range
 public-address-override
-public-ip
 pvclaimbinder-sync-period
 read-only-port
 really-crash-for-testing
@@ -197,6 +205,7 @@ required-contexts
 resource-container
 resource-quota-sync-period
 resource-version
+rkt-path
 root-ca-file
 root-dir
 run-proxy
@@ -212,6 +221,7 @@ service-node-port-range
 service-node-ports
 service-sync-period
 session-affinity
+show-all
 shutdown-fd
 shutdown-fifo
 skip-munges
@@ -232,6 +242,7 @@ tls-cert-file
 tls-private-key-file
 token-auth-file
 ttl-secs
+type-src
 unix-socket
 update-period
 upgrade-target
@@ -240,3 +251,5 @@ user-whitelist
 watch-only
 whitelist-override-label
 www-prefix
+retry_time
+file_content_in_loop

@@ -26,15 +26,6 @@ import (
 	conversion "k8s.io/kubernetes/pkg/conversion"
 )
 
-func convert_api_APIVersion_To_v1_APIVersion(in *api.APIVersion, out *APIVersion, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*api.APIVersion))(in)
-	}
-	out.Name = in.Name
-	out.APIGroup = in.APIGroup
-	return nil
-}
-
 func convert_api_AWSElasticBlockStoreVolumeSource_To_v1_AWSElasticBlockStoreVolumeSource(in *api.AWSElasticBlockStoreVolumeSource, out *AWSElasticBlockStoreVolumeSource, s conversion.Scope) error {
 	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
 		defaulting.(func(*api.AWSElasticBlockStoreVolumeSource))(in)
@@ -814,6 +805,30 @@ func convert_api_LimitRangeItem_To_v1_LimitRangeItem(in *api.LimitRangeItem, out
 	} else {
 		out.Default = nil
 	}
+	if in.DefaultRequest != nil {
+		out.DefaultRequest = make(ResourceList)
+		for key, val := range in.DefaultRequest {
+			newVal := resource.Quantity{}
+			if err := s.Convert(&val, &newVal, 0); err != nil {
+				return err
+			}
+			out.DefaultRequest[ResourceName(key)] = newVal
+		}
+	} else {
+		out.DefaultRequest = nil
+	}
+	if in.MaxLimitRequestRatio != nil {
+		out.MaxLimitRequestRatio = make(ResourceList)
+		for key, val := range in.MaxLimitRequestRatio {
+			newVal := resource.Quantity{}
+			if err := s.Convert(&val, &newVal, 0); err != nil {
+				return err
+			}
+			out.MaxLimitRequestRatio[ResourceName(key)] = newVal
+		}
+	} else {
+		out.MaxLimitRequestRatio = nil
+	}
 	return nil
 }
 
@@ -1175,6 +1190,12 @@ func convert_api_ObjectMeta_To_v1_ObjectMeta(in *api.ObjectMeta, out *ObjectMeta
 		}
 	} else {
 		out.DeletionTimestamp = nil
+	}
+	if in.DeletionGracePeriodSeconds != nil {
+		out.DeletionGracePeriodSeconds = new(int64)
+		*out.DeletionGracePeriodSeconds = *in.DeletionGracePeriodSeconds
+	} else {
+		out.DeletionGracePeriodSeconds = nil
 	}
 	if in.Labels != nil {
 		out.Labels = make(map[string]string)
@@ -2166,13 +2187,13 @@ func convert_api_ServiceSpec_To_v1_ServiceSpec(in *api.ServiceSpec, out *Service
 	}
 	out.ClusterIP = in.ClusterIP
 	out.Type = ServiceType(in.Type)
-	if in.DeprecatedPublicIPs != nil {
-		out.DeprecatedPublicIPs = make([]string, len(in.DeprecatedPublicIPs))
-		for i := range in.DeprecatedPublicIPs {
-			out.DeprecatedPublicIPs[i] = in.DeprecatedPublicIPs[i]
+	if in.ExternalIPs != nil {
+		out.ExternalIPs = make([]string, len(in.ExternalIPs))
+		for i := range in.ExternalIPs {
+			out.ExternalIPs[i] = in.ExternalIPs[i]
 		}
 	} else {
-		out.DeprecatedPublicIPs = nil
+		out.ExternalIPs = nil
 	}
 	out.SessionAffinity = ServiceAffinity(in.SessionAffinity)
 	return nil
@@ -2253,30 +2274,6 @@ func convert_api_TCPSocketAction_To_v1_TCPSocketAction(in *api.TCPSocketAction, 
 	return nil
 }
 
-func convert_api_ThirdPartyResource_To_v1_ThirdPartyResource(in *api.ThirdPartyResource, out *ThirdPartyResource, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*api.ThirdPartyResource))(in)
-	}
-	if err := convert_api_TypeMeta_To_v1_TypeMeta(&in.TypeMeta, &out.TypeMeta, s); err != nil {
-		return err
-	}
-	if err := convert_api_ObjectMeta_To_v1_ObjectMeta(&in.ObjectMeta, &out.ObjectMeta, s); err != nil {
-		return err
-	}
-	out.Description = in.Description
-	if in.Versions != nil {
-		out.Versions = make([]APIVersion, len(in.Versions))
-		for i := range in.Versions {
-			if err := convert_api_APIVersion_To_v1_APIVersion(&in.Versions[i], &out.Versions[i], s); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Versions = nil
-	}
-	return nil
-}
-
 func convert_api_ThirdPartyResourceData_To_v1_ThirdPartyResourceData(in *api.ThirdPartyResourceData, out *ThirdPartyResourceData, s conversion.Scope) error {
 	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
 		defaulting.(func(*api.ThirdPartyResourceData))(in)
@@ -2289,29 +2286,6 @@ func convert_api_ThirdPartyResourceData_To_v1_ThirdPartyResourceData(in *api.Thi
 	}
 	if err := s.Convert(&in.Data, &out.Data, 0); err != nil {
 		return err
-	}
-	return nil
-}
-
-func convert_api_ThirdPartyResourceList_To_v1_ThirdPartyResourceList(in *api.ThirdPartyResourceList, out *ThirdPartyResourceList, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*api.ThirdPartyResourceList))(in)
-	}
-	if err := convert_api_TypeMeta_To_v1_TypeMeta(&in.TypeMeta, &out.TypeMeta, s); err != nil {
-		return err
-	}
-	if err := convert_api_ListMeta_To_v1_ListMeta(&in.ListMeta, &out.ListMeta, s); err != nil {
-		return err
-	}
-	if in.Items != nil {
-		out.Items = make([]ThirdPartyResource, len(in.Items))
-		for i := range in.Items {
-			if err := convert_api_ThirdPartyResource_To_v1_ThirdPartyResource(&in.Items[i], &out.Items[i], s); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Items = nil
 	}
 	return nil
 }
@@ -2438,15 +2412,6 @@ func convert_api_VolumeSource_To_v1_VolumeSource(in *api.VolumeSource, out *Volu
 	} else {
 		out.RBD = nil
 	}
-	return nil
-}
-
-func convert_v1_APIVersion_To_api_APIVersion(in *APIVersion, out *api.APIVersion, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*APIVersion))(in)
-	}
-	out.Name = in.Name
-	out.APIGroup = in.APIGroup
 	return nil
 }
 
@@ -3229,6 +3194,30 @@ func convert_v1_LimitRangeItem_To_api_LimitRangeItem(in *LimitRangeItem, out *ap
 	} else {
 		out.Default = nil
 	}
+	if in.DefaultRequest != nil {
+		out.DefaultRequest = make(api.ResourceList)
+		for key, val := range in.DefaultRequest {
+			newVal := resource.Quantity{}
+			if err := s.Convert(&val, &newVal, 0); err != nil {
+				return err
+			}
+			out.DefaultRequest[api.ResourceName(key)] = newVal
+		}
+	} else {
+		out.DefaultRequest = nil
+	}
+	if in.MaxLimitRequestRatio != nil {
+		out.MaxLimitRequestRatio = make(api.ResourceList)
+		for key, val := range in.MaxLimitRequestRatio {
+			newVal := resource.Quantity{}
+			if err := s.Convert(&val, &newVal, 0); err != nil {
+				return err
+			}
+			out.MaxLimitRequestRatio[api.ResourceName(key)] = newVal
+		}
+	} else {
+		out.MaxLimitRequestRatio = nil
+	}
 	return nil
 }
 
@@ -3590,6 +3579,12 @@ func convert_v1_ObjectMeta_To_api_ObjectMeta(in *ObjectMeta, out *api.ObjectMeta
 		}
 	} else {
 		out.DeletionTimestamp = nil
+	}
+	if in.DeletionGracePeriodSeconds != nil {
+		out.DeletionGracePeriodSeconds = new(int64)
+		*out.DeletionGracePeriodSeconds = *in.DeletionGracePeriodSeconds
+	} else {
+		out.DeletionGracePeriodSeconds = nil
 	}
 	if in.Labels != nil {
 		out.Labels = make(map[string]string)
@@ -4581,13 +4576,13 @@ func convert_v1_ServiceSpec_To_api_ServiceSpec(in *ServiceSpec, out *api.Service
 	}
 	out.ClusterIP = in.ClusterIP
 	out.Type = api.ServiceType(in.Type)
-	if in.DeprecatedPublicIPs != nil {
-		out.DeprecatedPublicIPs = make([]string, len(in.DeprecatedPublicIPs))
-		for i := range in.DeprecatedPublicIPs {
-			out.DeprecatedPublicIPs[i] = in.DeprecatedPublicIPs[i]
+	if in.ExternalIPs != nil {
+		out.ExternalIPs = make([]string, len(in.ExternalIPs))
+		for i := range in.ExternalIPs {
+			out.ExternalIPs[i] = in.ExternalIPs[i]
 		}
 	} else {
-		out.DeprecatedPublicIPs = nil
+		out.ExternalIPs = nil
 	}
 	out.SessionAffinity = api.ServiceAffinity(in.SessionAffinity)
 	return nil
@@ -4668,30 +4663,6 @@ func convert_v1_TCPSocketAction_To_api_TCPSocketAction(in *TCPSocketAction, out 
 	return nil
 }
 
-func convert_v1_ThirdPartyResource_To_api_ThirdPartyResource(in *ThirdPartyResource, out *api.ThirdPartyResource, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*ThirdPartyResource))(in)
-	}
-	if err := convert_v1_TypeMeta_To_api_TypeMeta(&in.TypeMeta, &out.TypeMeta, s); err != nil {
-		return err
-	}
-	if err := convert_v1_ObjectMeta_To_api_ObjectMeta(&in.ObjectMeta, &out.ObjectMeta, s); err != nil {
-		return err
-	}
-	out.Description = in.Description
-	if in.Versions != nil {
-		out.Versions = make([]api.APIVersion, len(in.Versions))
-		for i := range in.Versions {
-			if err := convert_v1_APIVersion_To_api_APIVersion(&in.Versions[i], &out.Versions[i], s); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Versions = nil
-	}
-	return nil
-}
-
 func convert_v1_ThirdPartyResourceData_To_api_ThirdPartyResourceData(in *ThirdPartyResourceData, out *api.ThirdPartyResourceData, s conversion.Scope) error {
 	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
 		defaulting.(func(*ThirdPartyResourceData))(in)
@@ -4704,29 +4675,6 @@ func convert_v1_ThirdPartyResourceData_To_api_ThirdPartyResourceData(in *ThirdPa
 	}
 	if err := s.Convert(&in.Data, &out.Data, 0); err != nil {
 		return err
-	}
-	return nil
-}
-
-func convert_v1_ThirdPartyResourceList_To_api_ThirdPartyResourceList(in *ThirdPartyResourceList, out *api.ThirdPartyResourceList, s conversion.Scope) error {
-	if defaulting, found := s.DefaultingInterface(reflect.TypeOf(*in)); found {
-		defaulting.(func(*ThirdPartyResourceList))(in)
-	}
-	if err := convert_v1_TypeMeta_To_api_TypeMeta(&in.TypeMeta, &out.TypeMeta, s); err != nil {
-		return err
-	}
-	if err := convert_v1_ListMeta_To_api_ListMeta(&in.ListMeta, &out.ListMeta, s); err != nil {
-		return err
-	}
-	if in.Items != nil {
-		out.Items = make([]api.ThirdPartyResource, len(in.Items))
-		for i := range in.Items {
-			if err := convert_v1_ThirdPartyResource_To_api_ThirdPartyResource(&in.Items[i], &out.Items[i], s); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Items = nil
 	}
 	return nil
 }
@@ -4858,7 +4806,6 @@ func convert_v1_VolumeSource_To_api_VolumeSource(in *VolumeSource, out *api.Volu
 
 func init() {
 	err := api.Scheme.AddGeneratedConversionFuncs(
-		convert_api_APIVersion_To_v1_APIVersion,
 		convert_api_AWSElasticBlockStoreVolumeSource_To_v1_AWSElasticBlockStoreVolumeSource,
 		convert_api_Binding_To_v1_Binding,
 		convert_api_Capabilities_To_v1_Capabilities,
@@ -4973,13 +4920,10 @@ func init() {
 		convert_api_Status_To_v1_Status,
 		convert_api_TCPSocketAction_To_v1_TCPSocketAction,
 		convert_api_ThirdPartyResourceData_To_v1_ThirdPartyResourceData,
-		convert_api_ThirdPartyResourceList_To_v1_ThirdPartyResourceList,
-		convert_api_ThirdPartyResource_To_v1_ThirdPartyResource,
 		convert_api_TypeMeta_To_v1_TypeMeta,
 		convert_api_VolumeMount_To_v1_VolumeMount,
 		convert_api_VolumeSource_To_v1_VolumeSource,
 		convert_api_Volume_To_v1_Volume,
-		convert_v1_APIVersion_To_api_APIVersion,
 		convert_v1_AWSElasticBlockStoreVolumeSource_To_api_AWSElasticBlockStoreVolumeSource,
 		convert_v1_Binding_To_api_Binding,
 		convert_v1_Capabilities_To_api_Capabilities,
@@ -5094,8 +5038,6 @@ func init() {
 		convert_v1_Status_To_api_Status,
 		convert_v1_TCPSocketAction_To_api_TCPSocketAction,
 		convert_v1_ThirdPartyResourceData_To_api_ThirdPartyResourceData,
-		convert_v1_ThirdPartyResourceList_To_api_ThirdPartyResourceList,
-		convert_v1_ThirdPartyResource_To_api_ThirdPartyResource,
 		convert_v1_TypeMeta_To_api_TypeMeta,
 		convert_v1_VolumeMount_To_api_VolumeMount,
 		convert_v1_VolumeSource_To_api_VolumeSource,

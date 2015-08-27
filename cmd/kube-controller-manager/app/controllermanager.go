@@ -51,6 +51,9 @@ import (
 	"github.com/golang/glog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/pflag"
+
+	// TODO: Enable the code belowe when horizontal pod autoscaler controller is implemented.
+	// "k8s.io/kubernetes/pkg/controller/autoscaler"
 )
 
 // CMServer is the main context object for the controller manager.
@@ -196,7 +199,7 @@ func (s *CMServer) Run(_ []string) error {
 	}
 
 	nodeController := nodecontroller.NewNodeController(cloud, kubeClient,
-		s.PodEvictionTimeout, nodecontroller.NewPodEvictor(util.NewTokenBucketRateLimiter(s.DeletingPodsQps, s.DeletingPodsBurst)),
+		s.PodEvictionTimeout, util.NewTokenBucketRateLimiter(s.DeletingPodsQps, s.DeletingPodsBurst),
 		s.NodeMonitorGracePeriod, s.NodeStartupGracePeriod, s.NodeMonitorPeriod, &s.ClusterCIDR, s.AllocateNodeCIDRs)
 	nodeController.Run(s.NodeSyncPeriod)
 
@@ -263,6 +266,14 @@ func (s *CMServer) Run(_ []string) error {
 		kubeClient,
 		serviceaccount.DefaultServiceAccountsControllerOptions(),
 	).Run()
+
+	// TODO: Enable the code belowe when horizontal pod autoscaler controller is implemented.
+	// expClient, err := client.NewExperimental(kubeconfig)
+	// if err != nil {
+	// 	glog.Fatalf("Invalid API configuration: %v", err)
+	// }
+	// horizontalPodAutoscalerController := autoscalercontroller.New(kubeClient, expClient)
+	// horizontalPodAutoscalerController.Run(s.NodeSyncPeriod)
 
 	select {}
 }

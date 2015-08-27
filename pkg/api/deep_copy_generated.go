@@ -30,12 +30,6 @@ import (
 	inf "speter.net/go/exp/math/dec/inf"
 )
 
-func deepCopy_api_APIVersion(in APIVersion, out *APIVersion, c *conversion.Cloner) error {
-	out.Name = in.Name
-	out.APIGroup = in.APIGroup
-	return nil
-}
-
 func deepCopy_api_AWSElasticBlockStoreVolumeSource(in AWSElasticBlockStoreVolumeSource, out *AWSElasticBlockStoreVolumeSource, c *conversion.Cloner) error {
 	out.VolumeID = in.VolumeID
 	out.FSType = in.FSType
@@ -695,6 +689,30 @@ func deepCopy_api_LimitRangeItem(in LimitRangeItem, out *LimitRangeItem, c *conv
 	} else {
 		out.Default = nil
 	}
+	if in.DefaultRequest != nil {
+		out.DefaultRequest = make(ResourceList)
+		for key, val := range in.DefaultRequest {
+			newVal := new(resource.Quantity)
+			if err := deepCopy_resource_Quantity(val, newVal, c); err != nil {
+				return err
+			}
+			out.DefaultRequest[key] = *newVal
+		}
+	} else {
+		out.DefaultRequest = nil
+	}
+	if in.MaxLimitRequestRatio != nil {
+		out.MaxLimitRequestRatio = make(ResourceList)
+		for key, val := range in.MaxLimitRequestRatio {
+			newVal := new(resource.Quantity)
+			if err := deepCopy_resource_Quantity(val, newVal, c); err != nil {
+				return err
+			}
+			out.MaxLimitRequestRatio[key] = *newVal
+		}
+	} else {
+		out.MaxLimitRequestRatio = nil
+	}
 	return nil
 }
 
@@ -1010,6 +1028,12 @@ func deepCopy_api_ObjectMeta(in ObjectMeta, out *ObjectMeta, c *conversion.Clone
 		}
 	} else {
 		out.DeletionTimestamp = nil
+	}
+	if in.DeletionGracePeriodSeconds != nil {
+		out.DeletionGracePeriodSeconds = new(int64)
+		*out.DeletionGracePeriodSeconds = *in.DeletionGracePeriodSeconds
+	} else {
+		out.DeletionGracePeriodSeconds = nil
 	}
 	if in.Labels != nil {
 		out.Labels = make(map[string]string)
@@ -1949,13 +1973,13 @@ func deepCopy_api_ServiceSpec(in ServiceSpec, out *ServiceSpec, c *conversion.Cl
 	}
 	out.ClusterIP = in.ClusterIP
 	out.Type = in.Type
-	if in.DeprecatedPublicIPs != nil {
-		out.DeprecatedPublicIPs = make([]string, len(in.DeprecatedPublicIPs))
-		for i := range in.DeprecatedPublicIPs {
-			out.DeprecatedPublicIPs[i] = in.DeprecatedPublicIPs[i]
+	if in.ExternalIPs != nil {
+		out.ExternalIPs = make([]string, len(in.ExternalIPs))
+		for i := range in.ExternalIPs {
+			out.ExternalIPs[i] = in.ExternalIPs[i]
 		}
 	} else {
-		out.DeprecatedPublicIPs = nil
+		out.ExternalIPs = nil
 	}
 	out.SessionAffinity = in.SessionAffinity
 	return nil
@@ -2021,27 +2045,6 @@ func deepCopy_api_TCPSocketAction(in TCPSocketAction, out *TCPSocketAction, c *c
 	return nil
 }
 
-func deepCopy_api_ThirdPartyResource(in ThirdPartyResource, out *ThirdPartyResource, c *conversion.Cloner) error {
-	if err := deepCopy_api_TypeMeta(in.TypeMeta, &out.TypeMeta, c); err != nil {
-		return err
-	}
-	if err := deepCopy_api_ObjectMeta(in.ObjectMeta, &out.ObjectMeta, c); err != nil {
-		return err
-	}
-	out.Description = in.Description
-	if in.Versions != nil {
-		out.Versions = make([]APIVersion, len(in.Versions))
-		for i := range in.Versions {
-			if err := deepCopy_api_APIVersion(in.Versions[i], &out.Versions[i], c); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Versions = nil
-	}
-	return nil
-}
-
 func deepCopy_api_ThirdPartyResourceData(in ThirdPartyResourceData, out *ThirdPartyResourceData, c *conversion.Cloner) error {
 	if err := deepCopy_api_TypeMeta(in.TypeMeta, &out.TypeMeta, c); err != nil {
 		return err
@@ -2056,26 +2059,6 @@ func deepCopy_api_ThirdPartyResourceData(in ThirdPartyResourceData, out *ThirdPa
 		}
 	} else {
 		out.Data = nil
-	}
-	return nil
-}
-
-func deepCopy_api_ThirdPartyResourceList(in ThirdPartyResourceList, out *ThirdPartyResourceList, c *conversion.Cloner) error {
-	if err := deepCopy_api_TypeMeta(in.TypeMeta, &out.TypeMeta, c); err != nil {
-		return err
-	}
-	if err := deepCopy_api_ListMeta(in.ListMeta, &out.ListMeta, c); err != nil {
-		return err
-	}
-	if in.Items != nil {
-		out.Items = make([]ThirdPartyResource, len(in.Items))
-		for i := range in.Items {
-			if err := deepCopy_api_ThirdPartyResource(in.Items[i], &out.Items[i], c); err != nil {
-				return err
-			}
-		}
-	} else {
-		out.Items = nil
 	}
 	return nil
 }
@@ -2227,7 +2210,6 @@ func deepCopy_util_Time(in util.Time, out *util.Time, c *conversion.Cloner) erro
 
 func init() {
 	err := Scheme.AddGeneratedDeepCopyFuncs(
-		deepCopy_api_APIVersion,
 		deepCopy_api_AWSElasticBlockStoreVolumeSource,
 		deepCopy_api_Binding,
 		deepCopy_api_Capabilities,
@@ -2343,9 +2325,7 @@ func init() {
 		deepCopy_api_StatusCause,
 		deepCopy_api_StatusDetails,
 		deepCopy_api_TCPSocketAction,
-		deepCopy_api_ThirdPartyResource,
 		deepCopy_api_ThirdPartyResourceData,
-		deepCopy_api_ThirdPartyResourceList,
 		deepCopy_api_TypeMeta,
 		deepCopy_api_Volume,
 		deepCopy_api_VolumeMount,

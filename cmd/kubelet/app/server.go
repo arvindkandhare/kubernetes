@@ -116,6 +116,7 @@ type KubeletServer struct {
 	ResourceContainer              string
 	CgroupRoot                     string
 	ContainerRuntime               string
+	RktPath                        string
 	DockerDaemonContainer          string
 	SystemContainer                string
 	ConfigureCBR0                  bool
@@ -182,6 +183,7 @@ func NewKubeletServer() *KubeletServer {
 		ResourceContainer:           "/kubelet",
 		CgroupRoot:                  "",
 		ContainerRuntime:            "docker",
+		RktPath:                     "",
 		DockerDaemonContainer:       "/docker-daemon",
 		SystemContainer:             "",
 		ConfigureCBR0:               false,
@@ -245,6 +247,7 @@ func (s *KubeletServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.ResourceContainer, "resource-container", s.ResourceContainer, "Absolute name of the resource-only container to create and run the Kubelet in (Default: /kubelet).")
 	fs.StringVar(&s.CgroupRoot, "cgroup-root", s.CgroupRoot, "Optional root cgroup to use for pods. This is handled by the container runtime on a best effort basis. Default: '', which means use the container runtime default.")
 	fs.StringVar(&s.ContainerRuntime, "container-runtime", s.ContainerRuntime, "The container runtime to use. Possible values: 'docker', 'rkt'. Default: 'docker'.")
+	fs.StringVar(&s.RktPath, "rkt-path", s.RktPath, "Path of rkt binary. Leave empty to use the first rkt in $PATH.  Only used if --container-runtime='rkt'")
 	fs.StringVar(&s.SystemContainer, "system-container", s.SystemContainer, "Optional resource-only container in which to place all non-kernel processes that are not already in a container. Empty for no container. Rolling back the flag requires a reboot. (Default: \"\").")
 	fs.BoolVar(&s.ConfigureCBR0, "configure-cbr0", s.ConfigureCBR0, "If true, kubelet will configure cbr0 based on Node.Spec.PodCIDR.")
 	fs.IntVar(&s.MaxPods, "max-pods", 40, "Number of Pods that can run on this Kubelet.")
@@ -348,6 +351,7 @@ func (s *KubeletServer) KubeletConfig() (*KubeletConfig, error) {
 		ResourceContainer:         s.ResourceContainer,
 		CgroupRoot:                s.CgroupRoot,
 		ContainerRuntime:          s.ContainerRuntime,
+		RktPath:                   s.RktPath,
 		Mounter:                   mounter,
 		DockerDaemonContainer:     s.DockerDaemonContainer,
 		SystemContainer:           s.SystemContainer,
@@ -413,12 +417,12 @@ func (s *KubeletServer) Run(kcfg *KubeletConfig) error {
 
 	if s.HealthzPort > 0 {
 		healthz.DefaultHealthz()
-		go util.Forever(func() {
+		go util.Until(func() {
 			err := http.ListenAndServe(net.JoinHostPort(s.HealthzBindAddress.String(), strconv.Itoa(s.HealthzPort)), nil)
 			if err != nil {
 				glog.Errorf("Starting health server failed: %v", err)
 			}
-		}, 5*time.Second)
+		}, 5*time.Second, util.NeverStop)
 	}
 
 	if s.RunOnce {
@@ -638,7 +642,11 @@ func RunKubelet(kcfg *KubeletConfig, builder KubeletBuilder) error {
 	} else {
 		glog.Warning("No api server defined - no events will be sent to API server.")
 	}
-	capabilities.Setup(kcfg.AllowPrivileged, kcfg.HostNetworkSources, 0)
+
+	privilegedSources := capabilities.PrivilegedSources{
+		HostNetworkSources: kcfg.HostNetworkSources,
+	}
+	capabilities.Setup(kcfg.AllowPrivileged, privilegedSources, 0)
 
 	credentialprovider.SetPreferredDockercfgPath(kcfg.RootDirectory)
 
@@ -667,24 +675,24 @@ func RunKubelet(kcfg *KubeletConfig, builder KubeletBuilder) error {
 
 func startKubelet(k KubeletBootstrap, podCfg *config.PodConfig, kc *KubeletConfig) {
 	// start the kubelet
-	go util.Forever(func() { k.Run(podCfg.Updates()) }, 0)
+	go util.Until(func() { k.Run(podCfg.Updates()) }, 0, util.NeverStop)
 
 	// start the kubelet server
 	if kc.EnableServer {
-		go util.Forever(func() {
+		go util.Until(func() {
 			k.ListenAndServe(kc.Address, kc.Port, kc.TLSOptions, kc.EnableDebuggingHandlers)
-		}, 0)
+		}, 0, util.NeverStop)
 	}
 	if kc.ReadOnlyPort > 0 {
-		go util.Forever(func() {
+		go util.Until(func() {
 			k.ListenAndServeReadOnly(kc.Address, kc.ReadOnlyPort)
-		}, 0)
+		}, 0, util.NeverStop)
 	}
 }
 
 func makePodSourceConfig(kc *KubeletConfig) *config.PodConfig {
 	// source of all configuration
-	cfg := config.NewPodConfig(config.PodConfigNotificationSnapshotAndUpdates, kc.Recorder)
+	cfg := config.NewPodConfig(config.PodConfigNotificationIncremental, kc.Recorder)
 
 	// define file config source
 	if kc.ConfigFile != "" {
@@ -753,6 +761,7 @@ type KubeletConfig struct {
 	OSInterface                    kubecontainer.OSInterface
 	CgroupRoot                     string
 	ContainerRuntime               string
+	RktPath                        string
 	Mounter                        mount.Interface
 	DockerDaemonContainer          string
 	SystemContainer                string
@@ -811,6 +820,7 @@ func createAndInitKubelet(kc *KubeletConfig) (k KubeletBootstrap, pc *config.Pod
 		kc.OSInterface,
 		kc.CgroupRoot,
 		kc.ContainerRuntime,
+		kc.RktPath,
 		kc.Mounter,
 		kc.DockerDaemonContainer,
 		kc.SystemContainer,

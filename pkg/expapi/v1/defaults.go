@@ -16,5 +16,13 @@ limitations under the License.
 
 package v1
 
+import "k8s.io/kubernetes/pkg/api"
+
 func addDefaultingFuncs() {
+	api.Scheme.AddDefaultingFuncs(
+		func(obj *APIVersion) {
+			if len(obj.APIGroup) == 0 {
+				obj.APIGroup = "experimental"
+			}
+		})
 }

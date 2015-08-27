@@ -265,6 +265,16 @@ func ValidateObjectMetaUpdate(new, old *api.ObjectMeta) errs.ValidationErrorList
 	} else {
 		new.CreationTimestamp = old.CreationTimestamp
 	}
+	// an object can never remove a deletion timestamp or clear/change grace period seconds
+	if !old.DeletionTimestamp.IsZero() {
+		new.DeletionTimestamp = old.DeletionTimestamp
+	}
+	if old.DeletionGracePeriodSeconds != nil && new.DeletionGracePeriodSeconds == nil {
+		new.DeletionGracePeriodSeconds = old.DeletionGracePeriodSeconds
+	}
+	if new.DeletionGracePeriodSeconds != nil && old.DeletionGracePeriodSeconds != nil && *new.DeletionGracePeriodSeconds != *old.DeletionGracePeriodSeconds {
+		allErrs = append(allErrs, errs.NewFieldInvalid("deletionGracePeriodSeconds", new.DeletionGracePeriodSeconds, "field is immutable; may only be changed via deletion"))
+	}
 
 	// Reject updates that don't specify a resource version
 	if new.ResourceVersion == "" {
@@ -1090,12 +1100,11 @@ func ValidateService(service *api.Service) errs.ValidationErrorList {
 		}
 	}
 
-	for _, ip := range service.Spec.DeprecatedPublicIPs {
+	for _, ip := range service.Spec.ExternalIPs {
 		if ip == "0.0.0.0" {
-			allErrs = append(allErrs, errs.NewFieldInvalid("spec.publicIPs", ip, "is not an IP address"))
-		} else if util.IsValidIPv4(ip) && net.ParseIP(ip).IsLoopback() {
-			allErrs = append(allErrs, errs.NewFieldInvalid("spec.publicIPs", ip, "publicIP cannot be a loopback"))
+			allErrs = append(allErrs, errs.NewFieldInvalid("spec.externalIPs", ip, "is not an IP address"))
 		}
+		allErrs = append(allErrs, validateIpIsNotLinkLocalOrLoopback(ip, "spec.externalIPs")...)
 	}
 
 	if service.Spec.Type == "" {
@@ -1409,6 +1418,7 @@ func ValidateLimitRange(limitRange *api.LimitRange) errs.ValidationErrorList {
 		min := map[string]int64{}
 		max := map[string]int64{}
 		defaults := map[string]int64{}
+		defaultRequests := map[string]int64{}
 
 		for k := range limit.Max {
 			allErrs = append(allErrs, validateResourceName(string(k), fmt.Sprintf("spec.limits[%d].max[%s]", i, k))...)
@@ -1428,28 +1438,56 @@ func ValidateLimitRange(limitRange *api.LimitRange) errs.ValidationErrorList {
 			q := limit.Default[k]
 			defaults[string(k)] = q.Value()
 		}
+		for k := range limit.DefaultRequest {
+			allErrs = append(allErrs, validateResourceName(string(k), fmt.Sprintf("spec.limits[%d].defaultRequest[%s]", i, k))...)
+			keys.Insert(string(k))
+			q := limit.DefaultRequest[k]
+			defaultRequests[string(k)] = q.Value()
+		}
+		for k := range limit.MaxLimitRequestRatio {
+			allErrs = append(allErrs, validateResourceName(string(k), fmt.Sprintf("spec.limits[%d].maxLimitRequestRatio[%s]", i, k))...)
+		}
 
 		for k := range keys {
 			minValue, minValueFound := min[k]
 			maxValue, maxValueFound := max[k]
 			defaultValue, defaultValueFound := defaults[k]
+			defaultRequestValue, defaultRequestValueFound := defaultRequests[k]
 
 			if minValueFound && maxValueFound && minValue > maxValue {
 				minQuantity := limit.Min[api.ResourceName(k)]
 				maxQuantity := limit.Max[api.ResourceName(k)]
-				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].max[%s]", i, k), minValue, fmt.Sprintf("min value %s is greater than max value %s", minQuantity.String(), maxQuantity.String())))
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].min[%s]", i, k), minValue, fmt.Sprintf("min value %s is greater than max value %s", minQuantity.String(), maxQuantity.String())))
+			}
+
+			if defaultRequestValueFound && minValueFound && minValue > defaultRequestValue {
+				minQuantity := limit.Min[api.ResourceName(k)]
+				defaultRequestQuantity := limit.DefaultRequest[api.ResourceName(k)]
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].defaultRequest[%s]", i, k), defaultRequestValue, fmt.Sprintf("min value %s is greater than default request value %s", minQuantity.String(), defaultRequestQuantity.String())))
+			}
+
+			if defaultRequestValueFound && maxValueFound && defaultRequestValue > maxValue {
+				maxQuantity := limit.Max[api.ResourceName(k)]
+				defaultRequestQuantity := limit.DefaultRequest[api.ResourceName(k)]
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].defaultRequest[%s]", i, k), defaultRequestValue, fmt.Sprintf("default request value %s is greater than max value %s", defaultRequestQuantity.String(), maxQuantity.String())))
+			}
+
+			if defaultRequestValueFound && defaultValueFound && defaultRequestValue > defaultValue {
+				defaultQuantity := limit.Default[api.ResourceName(k)]
+				defaultRequestQuantity := limit.DefaultRequest[api.ResourceName(k)]
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].defaultRequest[%s]", i, k), defaultRequestValue, fmt.Sprintf("default request value %s is greater than default limit value %s", defaultRequestQuantity.String(), defaultQuantity.String())))
 			}
 
 			if defaultValueFound && minValueFound && minValue > defaultValue {
 				minQuantity := limit.Min[api.ResourceName(k)]
 				defaultQuantity := limit.Default[api.ResourceName(k)]
-				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].max[%s]", i, k), minValue, fmt.Sprintf("min value %s is greater than default value %s", minQuantity.String(), defaultQuantity.String())))
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].default[%s]", i, k), minValue, fmt.Sprintf("min value %s is greater than default value %s", minQuantity.String(), defaultQuantity.String())))
 			}
 
 			if defaultValueFound && maxValueFound && defaultValue > maxValue {
 				maxQuantity := limit.Max[api.ResourceName(k)]
 				defaultQuantity := limit.Default[api.ResourceName(k)]
-				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].max[%s]", i, k), minValue, fmt.Sprintf("default value %s is greater than max value %s", defaultQuantity.String(), maxQuantity.String())))
+				allErrs = append(allErrs, errs.NewFieldInvalid(fmt.Sprintf("spec.limits[%d].default[%s]", i, k), maxValue, fmt.Sprintf("default value %s is greater than max value %s", defaultQuantity.String(), maxQuantity.String())))
 			}
 		}
 	}
@@ -1734,23 +1772,32 @@ func validateEndpointSubsets(subsets []api.EndpointSubset) errs.ValidationErrorL
 	return allErrs
 }
 
-var linkLocalNet *net.IPNet
-
 func validateEndpointAddress(address *api.EndpointAddress) errs.ValidationErrorList {
-	if linkLocalNet == nil {
-		var err error
-		_, linkLocalNet, err = net.ParseCIDR("169.254.0.0/16")
-		if err != nil {
-			glog.Errorf("Failed to parse link-local CIDR: %v", err)
-		}
-	}
-
 	allErrs := errs.ValidationErrorList{}
 	if !util.IsValidIPv4(address.IP) {
 		allErrs = append(allErrs, errs.NewFieldInvalid("ip", address.IP, "invalid IPv4 address"))
+		return allErrs
 	}
-	if linkLocalNet.Contains(net.ParseIP(address.IP)) {
-		allErrs = append(allErrs, errs.NewFieldInvalid("ip", address.IP, "may not be in the link-local range (169.254.0.0/16)"))
+	return validateIpIsNotLinkLocalOrLoopback(address.IP, "ip")
+}
+
+func validateIpIsNotLinkLocalOrLoopback(ipAddress, fieldName string) errs.ValidationErrorList {
+	// We disallow some IPs as endpoints or external-ips.  Specifically, loopback addresses are
+	// nonsensical and link-local addresses tend to be used for node-centric purposes (e.g. metadata service).
+	allErrs := errs.ValidationErrorList{}
+	ip := net.ParseIP(ipAddress)
+	if ip == nil {
+		allErrs = append(allErrs, errs.NewFieldInvalid(fieldName, ipAddress, "not a valid IP address"))
+		return allErrs
+	}
+	if ip.IsLoopback() {
+		allErrs = append(allErrs, errs.NewFieldInvalid(fieldName, ipAddress, "may not be in the loopback range (127.0.0.0/8)"))
+	}
+	if ip.IsLinkLocalUnicast() {
+		allErrs = append(allErrs, errs.NewFieldInvalid(fieldName, ipAddress, "may not be in the link-local range (169.254.0.0/16)"))
+	}
+	if ip.IsLinkLocalMulticast() {
+		allErrs = append(allErrs, errs.NewFieldInvalid(fieldName, ipAddress, "may not be in the link-local multicast range (224.0.0.0/24)"))
 	}
 	return allErrs
 }
@@ -1803,6 +1850,10 @@ func ValidateSecurityContext(sc *api.SecurityContext) errs.ValidationErrorList {
 		}
 	}
 	return allErrs
+}
+
+func ValidateThirdPartyResourceUpdate(old, update *api.ThirdPartyResource) errs.ValidationErrorList {
+	return ValidateThirdPartyResource(update)
 }
 
 func ValidateThirdPartyResource(obj *api.ThirdPartyResource) errs.ValidationErrorList {

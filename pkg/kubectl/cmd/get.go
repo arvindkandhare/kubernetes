@@ -43,6 +43,9 @@ $ kubectl get pods
 # List all pods in ps output format with more information (such as node name).
 $ kubectl get pods -o wide
 
+# List all pods in resource/name format (such as pod/nginx).
+$ kubectl get pods -o name
+
 # List a single replication controller with specified NAME in ps output format.
 $ kubectl get replicationcontroller web
 
@@ -53,7 +56,7 @@ $ kubectl get -o json pod web-pod-13je7
 $ kubectl get -f pod.yaml -o json
 
 # Return only the phase value of the specified pod.
-$ kubectl get -o template web-pod-13je7 --template={{.status.phase}} --api-version=v1
+$ kubectl get -o template pod/web-pod-13je7 --template={{.status.phase}} --api-version=v1
 
 # List all replication controllers and services together in ps output format.
 $ kubectl get rc,services
@@ -65,11 +68,11 @@ $ kubectl get rc/web service/frontend pods/web-pod-13je7`
 // NewCmdGet creates a command object for the generic "get" action, which
 // retrieves one or more resources from a server.
 func NewCmdGet(f *cmdutil.Factory, out io.Writer) *cobra.Command {
-	p := kubectl.NewHumanReadablePrinter(false, false, false, []string{})
+	p := kubectl.NewHumanReadablePrinter(false, false, false, false, []string{})
 	validArgs := p.HandledResources()
 
 	cmd := &cobra.Command{
-		Use:     "get [(-o|--output=)json|yaml|template|wide|...] (TYPE [(NAME | -l label] | TYPE/NAME ...)",
+		Use:     "get [(-o|--output=)json|yaml|template|templatefile|wide|jsonpath|...] (TYPE [NAME | -l label] | TYPE/NAME ...) [flags]",
 		Short:   "Display one or many resources",
 		Long:    get_long,
 		Example: get_example,
@@ -205,7 +208,10 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 	}
 
 	// use the default printer for each object
-	return b.Do().Visit(func(r *resource.Info) error {
+	return b.Do().Visit(func(r *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
 		printer, err := f.PrinterForMapping(cmd, r.Mapping, allNamespaces)
 		if err != nil {
 			return err

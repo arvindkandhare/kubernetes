@@ -143,6 +143,10 @@ type ObjectMeta struct {
 	// will send a hard termination signal to the container.
 	DeletionTimestamp *util.Time `json:"deletionTimestamp,omitempty"`
 
+	// DeletionGracePeriodSeconds records the graceful deletion value set when graceful deletion
+	// was requested. Represents the most recent grace period, and may only be shortened once set.
+	DeletionGracePeriodSeconds *int64 `json:"deletionGracePeriodSeconds,omitempty"`
+
 	// Labels are key value pairs that may be used to scope and select individual resources.
 	// Label keys are of the form:
 	//     label-key ::= prefixed-name | name
@@ -193,6 +197,7 @@ type VolumeSource struct {
 	// directly exposed to the container. This is generally used for system
 	// agents or other privileged things that are allowed to see the host
 	// machine. Most containers will NOT need this.
+	// ---
 	// TODO(jonesdl) We need to restrict who can use host directory mounts and who can/can not
 	// mount host directories as read/write.
 	HostPath *HostPathVolumeSource `json:"hostPath,omitempty"`
@@ -286,10 +291,12 @@ const (
 	// PersistentVolumeReclaimRecycle means the volume will be recycled back into the pool of unbound persistent volumes on release from its claim.
 	// The volume plugin must support Recycling.
 	PersistentVolumeReclaimRecycle PersistentVolumeReclaimPolicy = "Recycle"
+
 	// PersistentVolumeReclaimDelete means the volume will be deleted from Kubernetes on release from its claim.
 	// The volume plugin must support Deletion.
 	// TODO: implement w/ DeletableVolumePlugin
 	// PersistentVolumeReclaimDelete PersistentVolumeReclaimPolicy = "Delete"
+
 	// PersistentVolumeReclaimRetain means the volume will left in its current phase (Released) for manual reclamation by the administrator.
 	// The default policy is Retain.
 	PersistentVolumeReclaimRetain PersistentVolumeReclaimPolicy = "Retain"
@@ -728,8 +735,8 @@ type Container struct {
 
 	// Variables for interactive containers, these have very specialized use-cases (e.g. debugging)
 	// and shouldn't be used for general purpose containers.
-	Stdin bool `json:"stdin,omitempty" description:"Whether this container should allocate a buffer for stdin in the container runtime; default is false"`
-	TTY   bool `json:"tty,omitempty" description:"Whether this container should allocate a TTY for itself, also requires 'stdin' to be true; default is false"`
+	Stdin bool `json:"stdin,omitempty"`
+	TTY   bool `json:"tty,omitempty"`
 }
 
 // Handler defines a specific action that should be taken
@@ -801,9 +808,7 @@ type ContainerState struct {
 
 type ContainerStatus struct {
 	// Each container in a pod must have a unique name.
-	Name string `json:"name"`
-	// TODO(dchen1107): Should we rename PodStatus to a more generic name or have a separate states
-	// defined for container?
+	Name                 string         `json:"name"`
 	State                ContainerState `json:"state,omitempty"`
 	LastTerminationState ContainerState `json:"lastState,omitempty"`
 	// Ready specifies whether the conatiner has passed its readiness check.
@@ -1190,10 +1195,9 @@ type ServiceSpec struct {
 	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
 	Type ServiceType `json:"type,omitempty"`
 
-	// DeprecatedPublicIPs are deprecated and silently ignored.
-	// Old behaviour: PublicIPs are used by external load balancers, or can be set by
+	// ExternalIPs are used by external load balancers, or can be set by
 	// users to handle external traffic that arrives at a node.
-	DeprecatedPublicIPs []string `json:"deprecatedPublicIPs,omitempty"`
+	ExternalIPs []string `json:"externalIPs,omitempty"`
 
 	// Required: Supports "ClientIP" and "None".  Used to maintain session affinity.
 	SessionAffinity ServiceAffinity `json:"sessionAffinity,omitempty"`
@@ -1938,8 +1942,12 @@ type LimitRangeItem struct {
 	Max ResourceList `json:"max,omitempty"`
 	// Min usage constraints on this kind by resource name
 	Min ResourceList `json:"min,omitempty"`
-	// Default usage constraints on this kind by resource name
+	// Default resource requirement limit value by resource name.
 	Default ResourceList `json:"default,omitempty"`
+	// DefaultRequest resource requirement request value by resource name.
+	DefaultRequest ResourceList `json:"defaultRequest,omitempty"`
+	// MaxLimitRequestRatio represents the max burst value for the named resource
+	MaxLimitRequestRatio ResourceList `json:"maxLimitRequestRatio,omitempty"`
 }
 
 // LimitRangeSpec defines a min/max usage limit for resources that match on kind
@@ -2213,30 +2221,30 @@ type RangeAllocation struct {
 // types to the API.  It consists of one or more Versions of the api.
 type ThirdPartyResource struct {
 	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+	ObjectMeta `json:"metadata,omitempty"`
 
-	Description string `json:"description,omitempty" description:"The description of this object"`
+	Description string `json:"description,omitempty"`
 
-	Versions []APIVersion `json:"versions,omitempty" description:"The versions for this third party object"`
+	Versions []APIVersion `json:"versions,omitempty"`
 }
 
 type ThirdPartyResourceList struct {
 	TypeMeta `json:",inline"`
-	ListMeta `json:"metadata,omitempty" description:"standard list metadata; see http://docs.k8s.io/api-conventions.md#metadata"`
+	ListMeta `json:"metadata,omitempty"`
 
-	Items []ThirdPartyResource `json:"items" description:"items is a list of schema objects"`
+	Items []ThirdPartyResource `json:"items"`
 }
 
 // An APIVersion represents a single concrete version of an object model.
 type APIVersion struct {
-	Name     string `json:"name,omitempty" description:"name of this version (e.g. 'v1')"`
-	APIGroup string `json:"apiGroup,omitempty" description:"The API group to add this object into, default 'experimental'"`
+	Name     string `json:"name,omitempty"`
+	APIGroup string `json:"apiGroup,omitempty"`
 }
 
 // An internal object, used for versioned storage in etcd.  Not exposed to the end user.
 type ThirdPartyResourceData struct {
 	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty" description:"standard object metadata"`
+	ObjectMeta `json:"metadata,omitempty"`
 
-	Data []byte `json:"name,omitempty" description:"the raw JSON data for this data"`
+	Data []byte `json:"name,omitempty"`
 }

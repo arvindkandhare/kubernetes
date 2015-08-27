@@ -25,16 +25,14 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	etcderrors "k8s.io/kubernetes/pkg/api/errors/etcd"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/rest/resttest"
+	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
-	"k8s.io/kubernetes/pkg/registry/pod"
+	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/securitycontext"
-	"k8s.io/kubernetes/pkg/storage"
-	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
 	"k8s.io/kubernetes/pkg/tools"
 	"k8s.io/kubernetes/pkg/tools/etcdtest"
 	"k8s.io/kubernetes/pkg/util"
@@ -42,20 +40,14 @@ import (
 	"github.com/coreos/go-etcd/etcd"
 )
 
-func newEtcdStorage(t *testing.T) (*tools.FakeEtcdClient, storage.Interface) {
-	fakeEtcdClient := tools.NewFakeEtcdClient(t)
-	fakeEtcdClient.TestIndex = true
-	etcdStorage := etcdstorage.NewEtcdStorage(fakeEtcdClient, latest.Codec, etcdtest.PathPrefix())
-	return fakeEtcdClient, etcdStorage
-}
-
-func newStorage(t *testing.T) (*REST, *BindingREST, *StatusREST, *tools.FakeEtcdClient, storage.Interface) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil)
-	return storage.Pod, storage.Binding, storage.Status, fakeEtcdClient, etcdStorage
+func newStorage(t *testing.T) (*REST, *BindingREST, *StatusREST, *tools.FakeEtcdClient) {
+	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t)
+	storage := NewStorage(etcdStorage, false, nil)
+	return storage.Pod, storage.Binding, storage.Status, fakeClient
 }
 
 func validNewPod() *api.Pod {
+	grace := int64(30)
 	return &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
@@ -64,6 +56,8 @@ func validNewPod() *api.Pod {
 		Spec: api.PodSpec{
 			RestartPolicy: api.RestartPolicyAlways,
 			DNSPolicy:     api.DNSClusterFirst,
+
+			TerminationGracePeriodSeconds: &grace,
 			Containers: []api.Container{
 				{
 					Name:            "foo",
@@ -87,43 +81,50 @@ func validChangedPod() *api.Pod {
 	return pod
 }
 
-func TestStorage(t *testing.T) {
-	storage, _, _, _, _ := newStorage(t)
-	pod.NewRegistry(storage)
-}
-
 func TestCreate(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
-	test := resttest.New(t, storage, fakeEtcdClient.SetError)
+	storage, _, _, fakeClient := newStorage(t)
+	test := resttest.New(t, storage, fakeClient.SetError)
 	pod := validNewPod()
 	pod.ObjectMeta = api.ObjectMeta{}
+	// Make an invalid pod with an an incorrect label.
+	invalidPod := validNewPod()
+	invalidPod.Namespace = test.TestNamespace()
+	invalidPod.Labels = map[string]string{
+		"invalid/label/to/cause/validation/failure": "bar",
+	}
 	test.TestCreate(
 		// valid
 		pod,
-		// invalid
+		func(ctx api.Context, obj runtime.Object) error {
+			return registrytest.SetObject(fakeClient, storage.KeyFunc, ctx, obj)
+		},
+		func(ctx api.Context, obj runtime.Object) (runtime.Object, error) {
+			return registrytest.GetObject(fakeClient, storage.KeyFunc, storage.NewFunc, ctx, obj)
+		},
+		// invalid (empty contains list)
 		&api.Pod{
 			Spec: api.PodSpec{
 				Containers: []api.Container{},
 			},
 		},
+		// invalid (invalid labels)
+		invalidPod,
 	)
 }
 
 func TestDelete(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	key, _ := storage.Etcd.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	test := resttest.New(t, storage, fakeEtcdClient.SetError)
+	test := resttest.New(t, storage, fakeClient.SetError)
 
 	createFn := func() runtime.Object {
 		pod := validChangedPod()
-		fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
+		fakeClient.Data[key] = tools.EtcdResponseWithError{
 			R: &etcd.Response{
 				Node: &etcd.Node{
-					Value:         runtime.EncodeOrDie(latest.Codec, pod),
+					Value:         runtime.EncodeOrDie(testapi.Codec(), pod),
 					ModifiedIndex: 1,
 				},
 			},
@@ -131,10 +132,10 @@ func TestDelete(t *testing.T) {
 		return pod
 	}
 	gracefulSetFn := func() bool {
-		if fakeEtcdClient.Data[key].R.Node == nil {
+		if fakeClient.Data[key].R.Node == nil {
 			return false
 		}
-		return fakeEtcdClient.Data[key].R.Node.TTL == 30
+		return fakeClient.Data[key].R.Node.TTL == 30
 	}
 	test.TestDelete(createFn, gracefulSetFn)
 }
@@ -149,31 +150,29 @@ func expectPod(t *testing.T, out runtime.Object) (*api.Pod, bool) {
 }
 
 func TestCreateRegistryError(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, fakeClient := newStorage(t)
+	fakeClient.Err = fmt.Errorf("test error")
 
 	pod := validNewPod()
 	_, err := storage.Create(api.NewDefaultContext(), pod)
-	if err != fakeEtcdClient.Err {
+	if err != fakeClient.Err {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestCreateSetsFields(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, fakeClient := newStorage(t)
 	pod := validNewPod()
 	_, err := storage.Create(api.NewDefaultContext(), pod)
-	if err != fakeEtcdClient.Err {
+	if err != fakeClient.Err {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	ctx := api.NewDefaultContext()
-	key, _ := storage.Etcd.KeyFunc(ctx, "foo")
-	actual := &api.Pod{}
-	if err := etcdStorage.Get(key, actual, false); err != nil {
-		t.Fatalf("unexpected extraction error: %v", err)
+	object, err := storage.Get(ctx, "foo")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
+	actual := object.(*api.Pod)
 	if actual.Name != pod.Name {
 		t.Errorf("unexpected pod: %#v", actual)
 	}
@@ -182,204 +181,16 @@ func TestCreateSetsFields(t *testing.T) {
 	}
 }
 
-func TestListError(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage := NewStorage(etcdStorage, nil).Pod
-	pods, err := storage.List(api.NewDefaultContext(), labels.Everything(), fields.Everything())
-	if err != fakeEtcdClient.Err {
-		t.Fatalf("Expected %#v, Got %#v", fakeEtcdClient.Err, err)
-	}
-	if pods != nil {
-		t.Errorf("Unexpected non-nil pod list: %#v", pods)
-	}
-}
-
-func TestListEmptyPodList(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	fakeEtcdClient.ChangeIndex = 1
-	ctx := api.NewContext()
-	storage := NewStorage(etcdStorage, nil).Pod
-	key := storage.Etcd.KeyRootFunc(ctx)
-	key = etcdtest.AddPrefix(key)
-
-	fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{},
-		E: fakeEtcdClient.NewError(tools.EtcdErrorCodeNotFound),
-	}
-	pods, err := storage.List(api.NewContext(), labels.Everything(), fields.Everything())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(pods.(*api.PodList).Items) != 0 {
-		t.Errorf("Unexpected non-zero pod list: %#v", pods)
-	}
-	if pods.(*api.PodList).ResourceVersion != "1" {
-		t.Errorf("Unexpected resource version: %#v", pods)
-	}
-}
-
-func TestListPodList(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	ctx := api.NewDefaultContext()
-	storage := NewStorage(etcdStorage, nil).Pod
-	key := storage.Etcd.KeyRootFunc(ctx)
-	key = etcdtest.AddPrefix(key)
-	fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Nodes: []*etcd.Node{
-					{
-						Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-							ObjectMeta: api.ObjectMeta{Name: "foo"},
-							Spec:       api.PodSpec{NodeName: "machine"},
-							Status:     api.PodStatus{Phase: api.PodRunning},
-						}),
-					},
-					{
-						Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-							ObjectMeta: api.ObjectMeta{Name: "bar"},
-							Spec:       api.PodSpec{NodeName: "machine"},
-						}),
-					},
-				},
-			},
-		},
-	}
-
-	podsObj, err := storage.List(api.NewDefaultContext(), labels.Everything(), fields.Everything())
-	pods := podsObj.(*api.PodList)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if len(pods.Items) != 2 {
-		t.Errorf("Unexpected pod list: %#v", pods)
-	}
-	if pods.Items[0].Name != "foo" || pods.Items[0].Status.Phase != api.PodRunning || pods.Items[0].Spec.NodeName != "machine" {
-		t.Errorf("Unexpected pod: %#v", pods.Items[0])
-	}
-	if pods.Items[1].Name != "bar" || pods.Items[1].Spec.NodeName != "machine" {
-		t.Errorf("Unexpected pod: %#v", pods.Items[1])
-	}
-}
-
-func TestListPodListSelection(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	ctx := api.NewDefaultContext()
-	storage := NewStorage(etcdStorage, nil).Pod
-	rootKey := etcdtest.AddPrefix("pods/default")
-	key := etcdtest.AddPrefix("pods/default/zot")
-	fakeEtcdClient.Data[rootKey] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Nodes: []*etcd.Node{
-					{Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-						ObjectMeta: api.ObjectMeta{Name: "foo"},
-					})},
-					{Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-						ObjectMeta: api.ObjectMeta{Name: "bar"},
-						Spec:       api.PodSpec{NodeName: "barhost"},
-					})},
-					{Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-						ObjectMeta: api.ObjectMeta{Name: "baz"},
-						Status:     api.PodStatus{Phase: api.PodFailed},
-					})},
-					{Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-						ObjectMeta: api.ObjectMeta{
-							Name:   "qux",
-							Labels: map[string]string{"label": "qux"},
-						},
-					})},
-					{Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-						ObjectMeta: api.ObjectMeta{Name: "zot"},
-					})},
-				},
-			},
-		},
-	}
-	fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-					ObjectMeta: api.ObjectMeta{Name: "zot"},
-				}),
-			},
-		},
-	}
-
-	table := []struct {
-		label, field string
-		expectedIDs  util.StringSet
-	}{
-		{
-			expectedIDs: util.NewStringSet("foo", "bar", "baz", "qux", "zot"),
-		}, {
-			field:       "metadata.name=zot",
-			expectedIDs: util.NewStringSet("zot"),
-		}, {
-			label:       "label=qux",
-			expectedIDs: util.NewStringSet("qux"),
-		}, {
-			field:       "status.phase=Failed",
-			expectedIDs: util.NewStringSet("baz"),
-		}, {
-			field:       "spec.nodeName=barhost",
-			expectedIDs: util.NewStringSet("bar"),
-		}, {
-			field:       "spec.nodeName=",
-			expectedIDs: util.NewStringSet("foo", "baz", "qux", "zot"),
-		}, {
-			field:       "spec.nodeName!=",
-			expectedIDs: util.NewStringSet("bar"),
-		},
-	}
-
-	for index, item := range table {
-		label, err := labels.Parse(item.label)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-			continue
-		}
-		field, err := fields.ParseSelector(item.field)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-			continue
-		}
-		podsObj, err := storage.List(ctx, label, field)
-		if err != nil {
-			t.Errorf("unexpected error: %v", err)
-		}
-		pods := podsObj.(*api.PodList)
-
-		set := util.NewStringSet()
-		for i := range pods.Items {
-			set.Insert(pods.Items[i].Name)
-		}
-		if e, a := len(item.expectedIDs), len(set); e != a {
-			t.Errorf("%v: Expected %v, got %v", index, item.expectedIDs, set)
-		}
-		/*for _, pod := range pods.Items {
-			if !item.expectedIDs.Has(pod.Name) {
-				t.Errorf("%v: Unexpected pod %v", index, pod.Name)
-			}
-			t.Logf("%v: Got pod Name: %v", index, pod.Name)
-		}*/
-	}
-}
-
 func TestPodDecode(t *testing.T) {
-	_, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, _ := newStorage(t)
 	expected := validNewPod()
-	body, err := latest.Codec.Encode(expected)
+	body, err := testapi.Codec().Encode(expected)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	actual := storage.New()
-	if err := latest.Codec.DecodeInto(body, actual); err != nil {
+	if err := testapi.Codec().DecodeInto(body, actual); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -388,78 +199,15 @@ func TestPodDecode(t *testing.T) {
 	}
 }
 
-// TODO: remove, this is covered by RESTTest.TestCreate
-func TestPodStorageValidatesCreate(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	fakeEtcdClient.Err = fmt.Errorf("test error")
-	storage := NewStorage(etcdStorage, nil).Pod
-
-	pod := validNewPod()
-	pod.Labels = map[string]string{
-		"invalid/label/to/cause/validation/failure": "bar",
-	}
-	c, err := storage.Create(api.NewDefaultContext(), pod)
-	if c != nil {
-		t.Errorf("Expected nil object")
-	}
-	if !errors.IsInvalid(err) {
-		t.Errorf("Expected to get an invalid resource error, got %v", err)
-	}
-}
-
-// TODO: remove, this is covered by RESTTest.TestCreate
-func TestCreatePod(t *testing.T) {
-	_, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
-	ctx := api.NewDefaultContext()
-	key, _ := storage.Etcd.KeyFunc(ctx, "foo")
-
-	pod := validNewPod()
-	obj, err := storage.Create(api.NewDefaultContext(), pod)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if obj == nil {
-		t.Fatalf("unexpected object: %#v", obj)
-	}
-	actual := &api.Pod{}
-	if err := etcdStorage.Get(key, actual, false); err != nil {
-		t.Fatalf("unexpected extraction error: %v", err)
-	}
-	if !api.HasObjectMetaSystemFieldValues(&actual.ObjectMeta) {
-		t.Errorf("Expected ObjectMeta field values were populated: %#v", actual)
-	}
-}
-
-// TODO: remove, this is covered by RESTTest.TestCreate
-func TestCreateWithConflictingNamespace(t *testing.T) {
-	_, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
-
-	pod := validNewPod()
-	pod.Namespace = "not-default"
-
-	obj, err := storage.Create(api.NewDefaultContext(), pod)
-	if obj != nil {
-		t.Error("Expected a nil obj, but we got a value")
-	}
-	if err == nil {
-		t.Errorf("Expected an error, but we didn't get one")
-	} else if strings.Contains(err.Error(), "Controller.Namespace does not match the provided context") {
-		t.Errorf("Expected 'Pod.Namespace does not match the provided context' error, got '%v'", err.Error())
-	}
-}
-
 func TestUpdateWithConflictingNamespace(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	key, _ := storage.Etcd.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
+	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
 			Node: &etcd.Node{
-				Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
+				Value: runtime.EncodeOrDie(testapi.Codec(), &api.Pod{
 					ObjectMeta: api.ObjectMeta{Name: "foo", Namespace: "default"},
 					Spec:       api.PodSpec{NodeName: "machine"},
 				}),
@@ -576,14 +324,13 @@ func TestResourceLocation(t *testing.T) {
 
 	ctx := api.NewDefaultContext()
 	for _, tc := range testCases {
-		fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-		storage := NewStorage(etcdStorage, nil).Pod
+		storage, _, _, fakeClient := newStorage(t)
 		key, _ := storage.Etcd.KeyFunc(ctx, "foo")
 		key = etcdtest.AddPrefix(key)
-		fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
+		fakeClient.Data[key] = tools.EtcdResponseWithError{
 			R: &etcd.Response{
 				Node: &etcd.Node{
-					Value: runtime.EncodeOrDie(latest.Codec, &tc.pod),
+					Value: runtime.EncodeOrDie(testapi.Codec(), &tc.pod),
 				},
 			},
 		}
@@ -607,16 +354,15 @@ func TestResourceLocation(t *testing.T) {
 }
 
 func TestDeletePod(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	fakeEtcdClient.ChangeIndex = 1
-	storage := NewStorage(etcdStorage, nil).Pod
+	storage, _, _, fakeClient := newStorage(t)
+	fakeClient.ChangeIndex = 1
 	ctx := api.NewDefaultContext()
 	key, _ := storage.Etcd.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeEtcdClient.Data[key] = tools.EtcdResponseWithError{
+	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
 			Node: &etcd.Node{
-				Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
+				Value: runtime.EncodeOrDie(testapi.Codec(), &api.Pod{
 					ObjectMeta: api.ObjectMeta{
 						Name:      "foo",
 						Namespace: api.NamespaceDefault,
@@ -635,18 +381,32 @@ func TestDeletePod(t *testing.T) {
 }
 
 func TestEtcdGet(t *testing.T) {
-	fakeEtcdClient, etcdStorage := newEtcdStorage(t)
-	storage := NewStorage(etcdStorage, nil).Pod
-	test := resttest.New(t, storage, fakeEtcdClient.SetError)
+	storage, _, _, fakeClient := newStorage(t)
+	test := resttest.New(t, storage, fakeClient.SetError)
 	pod := validNewPod()
 	test.TestGet(pod)
 }
 
+func TestEtcdList(t *testing.T) {
+	storage, _, _, fakeClient := newStorage(t)
+	test := resttest.New(t, storage, fakeClient.SetError)
+	key := etcdtest.AddPrefix(storage.Etcd.KeyRootFunc(test.TestContext()))
+	pod := validNewPod()
+	test.TestList(
+		pod,
+		func(objects []runtime.Object) []runtime.Object {
+			return registrytest.SetObjectsForKey(fakeClient, key, objects)
+		},
+		func(resourceVersion uint64) {
+			registrytest.SetResourceVersion(fakeClient, resourceVersion)
+		})
+}
+
 func TestEtcdCreate(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
@@ -654,13 +414,13 @@ func TestEtcdCreate(t *testing.T) {
 		},
 		E: tools.EtcdErrorNotFound,
 	}
-	_, err := registry.Create(ctx, validNewPod())
+	_, err := storage.Create(ctx, validNewPod())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Suddenly, a wild scheduler appears:
-	_, err = bindingRegistry.Create(ctx, &api.Binding{
+	_, err = bindingStorage.Create(ctx, &api.Binding{
 		ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "foo"},
 		Target:     api.ObjectReference{Name: "machine"},
 	})
@@ -673,7 +433,7 @@ func TestEtcdCreate(t *testing.T) {
 		t.Fatalf("Unexpected error %v", err)
 	}
 	var pod api.Pod
-	err = latest.Codec.DecodeInto([]byte(resp.Node.Value), &pod)
+	err = testapi.Codec().DecodeInto([]byte(resp.Node.Value), &pod)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -681,17 +441,16 @@ func TestEtcdCreate(t *testing.T) {
 	if pod.Name != "foo" {
 		t.Errorf("Unexpected pod: %#v %s", pod, resp.Node.Value)
 	}
-
 }
 
 // Ensure that when scheduler creates a binding for a pod that has already been deleted
 // by the API server, API server returns not-found error.
 func TestEtcdCreateBindingNoPod(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
@@ -703,7 +462,7 @@ func TestEtcdCreateBindingNoPod(t *testing.T) {
 	// - Create (apiserver)
 	// - Schedule (scheduler)
 	// - Delete (apiserver)
-	_, err := bindingRegistry.Create(ctx, &api.Binding{
+	_, err := bindingStorage.Create(ctx, &api.Binding{
 		ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "foo"},
 		Target:     api.ObjectReference{Name: "machine"},
 	})
@@ -714,7 +473,7 @@ func TestEtcdCreateBindingNoPod(t *testing.T) {
 		t.Fatalf("Unexpected error returned: %#v", err)
 	}
 
-	_, err = registry.Get(ctx, "foo")
+	_, err = storage.Get(ctx, "foo")
 	if err == nil {
 		t.Fatalf("Expected not-found-error but got nothing")
 	}
@@ -724,41 +483,22 @@ func TestEtcdCreateBindingNoPod(t *testing.T) {
 }
 
 func TestEtcdCreateFailsWithoutNamespace(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	fakeClient.TestIndex = true
 	pod := validNewPod()
 	pod.Namespace = ""
-	_, err := registry.Create(api.NewContext(), pod)
+	_, err := storage.Create(api.NewContext(), pod)
 	// Accept "namespace" or "Namespace".
 	if err == nil || !strings.Contains(err.Error(), "amespace") {
 		t.Fatalf("expected error that namespace was missing from context, got: %v", err)
 	}
 }
 
-func TestEtcdCreateAlreadyExisting(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
-	ctx := api.NewDefaultContext()
-	key, _ := registry.KeyFunc(ctx, "foo")
-	key = etcdtest.AddPrefix(key)
-	fakeClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}),
-			},
-		},
-		E: nil,
-	}
-	_, err := registry.Create(ctx, validNewPod())
-	if !errors.IsAlreadyExists(err) {
-		t.Errorf("Unexpected error returned: %#v", err)
-	}
-}
-
 func TestEtcdCreateWithContainersNotFound(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
@@ -766,13 +506,13 @@ func TestEtcdCreateWithContainersNotFound(t *testing.T) {
 		},
 		E: tools.EtcdErrorNotFound,
 	}
-	_, err := registry.Create(ctx, validNewPod())
+	_, err := storage.Create(ctx, validNewPod())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Suddenly, a wild scheduler appears:
-	_, err = bindingRegistry.Create(ctx, &api.Binding{
+	_, err = bindingStorage.Create(ctx, &api.Binding{
 		ObjectMeta: api.ObjectMeta{
 			Namespace:   api.NamespaceDefault,
 			Name:        "foo",
@@ -789,7 +529,7 @@ func TestEtcdCreateWithContainersNotFound(t *testing.T) {
 		t.Fatalf("Unexpected error %v", err)
 	}
 	var pod api.Pod
-	err = latest.Codec.DecodeInto([]byte(resp.Node.Value), &pod)
+	err = testapi.Codec().DecodeInto([]byte(resp.Node.Value), &pod)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -803,10 +543,10 @@ func TestEtcdCreateWithContainersNotFound(t *testing.T) {
 }
 
 func TestEtcdCreateWithConflict(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
 			Node: nil,
@@ -814,7 +554,7 @@ func TestEtcdCreateWithConflict(t *testing.T) {
 		E: tools.EtcdErrorNotFound,
 	}
 
-	_, err := registry.Create(ctx, validNewPod())
+	_, err := storage.Create(ctx, validNewPod())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -828,22 +568,22 @@ func TestEtcdCreateWithConflict(t *testing.T) {
 		},
 		Target: api.ObjectReference{Name: "machine"},
 	}
-	_, err = bindingRegistry.Create(ctx, &binding)
+	_, err = bindingStorage.Create(ctx, &binding)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	_, err = bindingRegistry.Create(ctx, &binding)
+	_, err = bindingStorage.Create(ctx, &binding)
 	if err == nil || !errors.IsConflict(err) {
 		t.Fatalf("expected resource conflict error, not: %v", err)
 	}
 }
 
 func TestEtcdCreateWithExistingContainers(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{
@@ -851,13 +591,13 @@ func TestEtcdCreateWithExistingContainers(t *testing.T) {
 		},
 		E: tools.EtcdErrorNotFound,
 	}
-	_, err := registry.Create(ctx, validNewPod())
+	_, err := storage.Create(ctx, validNewPod())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Suddenly, a wild scheduler appears:
-	_, err = bindingRegistry.Create(ctx, &api.Binding{
+	_, err = bindingStorage.Create(ctx, &api.Binding{
 		ObjectMeta: api.ObjectMeta{Namespace: api.NamespaceDefault, Name: "foo"},
 		Target:     api.ObjectReference{Name: "machine"},
 	})
@@ -870,7 +610,7 @@ func TestEtcdCreateWithExistingContainers(t *testing.T) {
 		t.Fatalf("Unexpected error %v", err)
 	}
 	var pod api.Pod
-	err = latest.Codec.DecodeInto([]byte(resp.Node.Value), &pod)
+	err = testapi.Codec().DecodeInto([]byte(resp.Node.Value), &pod)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -881,7 +621,7 @@ func TestEtcdCreateWithExistingContainers(t *testing.T) {
 }
 
 func TestEtcdCreateBinding(t *testing.T) {
-	registry, bindingRegistry, _, fakeClient, _ := newStorage(t)
+	storage, bindingStorage, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
@@ -926,7 +666,7 @@ func TestEtcdCreateBinding(t *testing.T) {
 		},
 	}
 	for k, test := range testCases {
-		key, _ := registry.KeyFunc(ctx, "foo")
+		key, _ := storage.KeyFunc(ctx, "foo")
 		key = etcdtest.AddPrefix(key)
 		fakeClient.Data[key] = tools.EtcdResponseWithError{
 			R: &etcd.Response{
@@ -934,14 +674,14 @@ func TestEtcdCreateBinding(t *testing.T) {
 			},
 			E: tools.EtcdErrorNotFound,
 		}
-		if _, err := registry.Create(ctx, validNewPod()); err != nil {
+		if _, err := storage.Create(ctx, validNewPod()); err != nil {
 			t.Fatalf("%s: unexpected error: %v", k, err)
 		}
-		if _, err := bindingRegistry.Create(ctx, &test.binding); !test.errOK(err) {
+		if _, err := bindingStorage.Create(ctx, &test.binding); !test.errOK(err) {
 			t.Errorf("%s: unexpected error: %v", k, err)
 		} else if err == nil {
 			// If bind succeeded, verify Host field in pod's Spec.
-			pod, err := registry.Get(ctx, validNewPod().ObjectMeta.Name)
+			pod, err := storage.Get(ctx, validNewPod().ObjectMeta.Name)
 			if err != nil {
 				t.Errorf("%s: unexpected error: %v", k, err)
 			} else if pod.(*api.Pod).Spec.NodeName != test.binding.Target.Name {
@@ -952,11 +692,11 @@ func TestEtcdCreateBinding(t *testing.T) {
 }
 
 func TestEtcdUpdateNotFound(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	fakeClient.Data[key] = tools.EtcdResponseWithError{
 		R: &etcd.Response{},
@@ -972,23 +712,23 @@ func TestEtcdUpdateNotFound(t *testing.T) {
 			},
 		},
 	}
-	_, _, err := registry.Update(ctx, &podIn)
+	_, _, err := storage.Update(ctx, &podIn)
 	if err == nil {
 		t.Errorf("unexpected non-error")
 	}
 }
 
 func TestEtcdUpdateNotScheduled(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, validNewPod()), 1)
+	fakeClient.Set(key, runtime.EncodeOrDie(testapi.Codec(), validNewPod()), 1)
 
 	podIn := validChangedPod()
-	_, _, err := registry.Update(ctx, podIn)
+	_, _, err := storage.Update(ctx, podIn)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -997,20 +737,20 @@ func TestEtcdUpdateNotScheduled(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 	podOut := &api.Pod{}
-	latest.Codec.DecodeInto([]byte(response.Node.Value), podOut)
+	testapi.Codec().DecodeInto([]byte(response.Node.Value), podOut)
 	if !api.Semantic.DeepEqual(podOut, podIn) {
 		t.Errorf("objects differ: %v", util.ObjectDiff(podOut, podIn))
 	}
 }
 
 func TestEtcdUpdateScheduled(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, &api.Pod{
+	fakeClient.Set(key, runtime.EncodeOrDie(testapi.Codec(), &api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
 			Namespace: api.NamespaceDefault,
@@ -1027,6 +767,7 @@ func TestEtcdUpdateScheduled(t *testing.T) {
 		},
 	}), 1)
 
+	grace := int64(30)
 	podIn := api.Pod{
 		ObjectMeta: api.ObjectMeta{
 			Name:            "foo",
@@ -1048,9 +789,11 @@ func TestEtcdUpdateScheduled(t *testing.T) {
 			},
 			RestartPolicy: api.RestartPolicyAlways,
 			DNSPolicy:     api.DNSClusterFirst,
+
+			TerminationGracePeriodSeconds: &grace,
 		},
 	}
-	_, _, err := registry.Update(ctx, &podIn)
+	_, _, err := storage.Update(ctx, &podIn)
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -1059,7 +802,7 @@ func TestEtcdUpdateScheduled(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 	var podOut api.Pod
-	latest.Codec.DecodeInto([]byte(response.Node.Value), &podOut)
+	testapi.Codec().DecodeInto([]byte(response.Node.Value), &podOut)
 	if !api.Semantic.DeepEqual(podOut, podIn) {
 		t.Errorf("expected: %#v, got: %#v", podOut, podIn)
 	}
@@ -1067,11 +810,11 @@ func TestEtcdUpdateScheduled(t *testing.T) {
 }
 
 func TestEtcdUpdateStatus(t *testing.T) {
-	registry, _, status, fakeClient, etcdStorage := newStorage(t)
+	storage, _, statusStorage, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
 	podStart := api.Pod{
 		ObjectMeta: api.ObjectMeta{
@@ -1088,7 +831,7 @@ func TestEtcdUpdateStatus(t *testing.T) {
 			},
 		},
 	}
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, &podStart), 1)
+	fakeClient.Set(key, runtime.EncodeOrDie(testapi.Codec(), &podStart), 0)
 
 	podIn := api.Pod{
 		ObjectMeta: api.ObjectMeta{
@@ -1117,6 +860,8 @@ func TestEtcdUpdateStatus(t *testing.T) {
 
 	expected := podStart
 	expected.ResourceVersion = "2"
+	grace := int64(30)
+	expected.Spec.TerminationGracePeriodSeconds = &grace
 	expected.Spec.RestartPolicy = api.RestartPolicyAlways
 	expected.Spec.DNSPolicy = api.DNSClusterFirst
 	expected.Spec.Containers[0].ImagePullPolicy = api.PullIfNotPresent
@@ -1124,32 +869,31 @@ func TestEtcdUpdateStatus(t *testing.T) {
 	expected.Labels = podIn.Labels
 	expected.Status = podIn.Status
 
-	_, _, err := status.Update(ctx, &podIn)
+	_, _, err := statusStorage.Update(ctx, &podIn)
 	if err != nil {
 		t.Fatalf("Unexpected error: %v", err)
 	}
-	var podOut api.Pod
-	key, _ = registry.KeyFunc(ctx, "foo")
-	if err := etcdStorage.Get(key, &podOut, false); err != nil {
-		t.Fatalf("Unexpected error: %v", err)
+	podOut, err := storage.Get(ctx, "foo")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
-	if !api.Semantic.DeepEqual(expected, podOut) {
-		t.Errorf("unexpected object: %s", util.ObjectDiff(expected, podOut))
+	if !api.Semantic.DeepEqual(&expected, podOut) {
+		t.Errorf("unexpected object: %s", util.ObjectDiff(&expected, podOut))
 	}
 }
 
 func TestEtcdDeletePod(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
 
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, &api.Pod{
+	fakeClient.Set(key, runtime.EncodeOrDie(testapi.Codec(), &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: "foo"},
 		Spec:       api.PodSpec{NodeName: "machine"},
 	}), 0)
-	_, err := registry.Delete(ctx, "foo", api.NewDeleteOptions(0))
+	_, err := storage.Delete(ctx, "foo", api.NewDeleteOptions(0))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -1162,16 +906,16 @@ func TestEtcdDeletePod(t *testing.T) {
 }
 
 func TestEtcdDeletePodMultipleContainers(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
 	fakeClient.TestIndex = true
-	key, _ := registry.KeyFunc(ctx, "foo")
+	key, _ := storage.KeyFunc(ctx, "foo")
 	key = etcdtest.AddPrefix(key)
-	fakeClient.Set(key, runtime.EncodeOrDie(latest.Codec, &api.Pod{
+	fakeClient.Set(key, runtime.EncodeOrDie(testapi.Codec(), &api.Pod{
 		ObjectMeta: api.ObjectMeta{Name: "foo"},
 		Spec:       api.PodSpec{NodeName: "machine"},
 	}), 0)
-	_, err := registry.Delete(ctx, "foo", api.NewDeleteOptions(0))
+	_, err := storage.Delete(ctx, "foo", api.NewDeleteOptions(0))
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -1184,94 +928,10 @@ func TestEtcdDeletePodMultipleContainers(t *testing.T) {
 	}
 }
 
-func TestEtcdEmptyList(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
-	ctx := api.NewDefaultContext()
-	key := registry.KeyRootFunc(ctx)
-	key = etcdtest.AddPrefix(key)
-	fakeClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Nodes: []*etcd.Node{},
-			},
-		},
-		E: nil,
-	}
-
-	obj, err := registry.List(ctx, labels.Everything(), fields.Everything())
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	pods := obj.(*api.PodList)
-	if len(pods.Items) != 0 {
-		t.Errorf("Unexpected pod list: %#v", pods)
-	}
-}
-
-func TestEtcdListNotFound(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
-	ctx := api.NewDefaultContext()
-	key := registry.KeyRootFunc(ctx)
-	key = etcdtest.AddPrefix(key)
-	fakeClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{},
-		E: tools.EtcdErrorNotFound,
-	}
-	obj, err := registry.List(ctx, labels.Everything(), fields.Everything())
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	pods := obj.(*api.PodList)
-	if len(pods.Items) != 0 {
-		t.Errorf("Unexpected pod list: %#v", pods)
-	}
-}
-
-func TestEtcdList(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
-	ctx := api.NewDefaultContext()
-	key := registry.KeyRootFunc(ctx)
-	key = etcdtest.AddPrefix(key)
-	fakeClient.Data[key] = tools.EtcdResponseWithError{
-		R: &etcd.Response{
-			Node: &etcd.Node{
-				Nodes: []*etcd.Node{
-					{
-						Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-							ObjectMeta: api.ObjectMeta{Name: "foo"},
-							Spec:       api.PodSpec{NodeName: "machine"},
-						}),
-					},
-					{
-						Value: runtime.EncodeOrDie(latest.Codec, &api.Pod{
-							ObjectMeta: api.ObjectMeta{Name: "bar"},
-							Spec:       api.PodSpec{NodeName: "machine"},
-						}),
-					},
-				},
-			},
-		},
-		E: nil,
-	}
-	obj, err := registry.List(ctx, labels.Everything(), fields.Everything())
-	if err != nil {
-		t.Errorf("unexpected error: %v", err)
-	}
-	pods := obj.(*api.PodList)
-
-	if len(pods.Items) != 2 || pods.Items[0].Name != "foo" || pods.Items[1].Name != "bar" {
-		t.Errorf("Unexpected pod list: %#v", pods)
-	}
-	if pods.Items[0].Spec.NodeName != "machine" ||
-		pods.Items[1].Spec.NodeName != "machine" {
-		t.Errorf("Failed to populate host name.")
-	}
-}
-
 func TestEtcdWatchPods(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
-	watching, err := registry.Watch(ctx,
+	watching, err := storage.Watch(ctx,
 		labels.Everything(),
 		fields.Everything(),
 		"1",
@@ -1296,9 +956,9 @@ func TestEtcdWatchPods(t *testing.T) {
 }
 
 func TestEtcdWatchPodsMatch(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
-	watching, err := registry.Watch(ctx,
+	watching, err := storage.Watch(ctx,
 		labels.SelectorFromSet(labels.Set{"name": "foo"}),
 		fields.Everything(),
 		"1",
@@ -1310,13 +970,14 @@ func TestEtcdWatchPodsMatch(t *testing.T) {
 
 	pod := &api.Pod{
 		ObjectMeta: api.ObjectMeta{
-			Name: "foo",
+			Name:      "foo",
+			Namespace: "default",
 			Labels: map[string]string{
 				"name": "foo",
 			},
 		},
 	}
-	podBytes, _ := latest.Codec.Encode(pod)
+	podBytes, _ := testapi.Codec().Encode(pod)
 	fakeClient.WatchResponse <- &etcd.Response{
 		Action: "create",
 		Node: &etcd.Node{
@@ -1335,9 +996,9 @@ func TestEtcdWatchPodsMatch(t *testing.T) {
 }
 
 func TestEtcdWatchPodsNotMatch(t *testing.T) {
-	registry, _, _, fakeClient, _ := newStorage(t)
+	storage, _, _, fakeClient := newStorage(t)
 	ctx := api.NewDefaultContext()
-	watching, err := registry.Watch(ctx,
+	watching, err := storage.Watch(ctx,
 		labels.SelectorFromSet(labels.Set{"name": "foo"}),
 		fields.Everything(),
 		"1",
@@ -1355,7 +1016,7 @@ func TestEtcdWatchPodsNotMatch(t *testing.T) {
 			},
 		},
 	}
-	podBytes, _ := latest.Codec.Encode(pod)
+	podBytes, _ := testapi.Codec().Encode(pod)
 	fakeClient.WatchResponse <- &etcd.Response{
 		Action: "create",
 		Node: &etcd.Node{

@@ -1317,6 +1317,9 @@ func TestValidatePod(t *testing.T) {
 }
 
 func TestValidatePodUpdate(t *testing.T) {
+	now := util.Now()
+	grace := int64(30)
+	grace2 := int64(31)
 	tests := []struct {
 		a       api.Pod
 		b       api.Pod
@@ -1402,6 +1405,30 @@ func TestValidatePodUpdate(t *testing.T) {
 			},
 			false,
 			"more containers",
+		},
+		{
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo", DeletionTimestamp: &now},
+				Spec:       api.PodSpec{Containers: []api.Container{{Image: "foo:V1"}}},
+			},
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo"},
+				Spec:       api.PodSpec{Containers: []api.Container{{Image: "foo:V1"}}},
+			},
+			true,
+			"deletion timestamp filled out",
+		},
+		{
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo", DeletionTimestamp: &now, DeletionGracePeriodSeconds: &grace},
+				Spec:       api.PodSpec{Containers: []api.Container{{Image: "foo:V1"}}},
+			},
+			api.Pod{
+				ObjectMeta: api.ObjectMeta{Name: "foo", DeletionTimestamp: &now, DeletionGracePeriodSeconds: &grace2},
+				Spec:       api.PodSpec{Containers: []api.Container{{Image: "foo:V1"}}},
+			},
+			false,
+			"deletion grace period seconds cleared",
 		},
 		{
 			api.Pod{
@@ -1721,23 +1748,23 @@ func TestValidateService(t *testing.T) {
 		{
 			name: "invalid publicIPs localhost",
 			tweakSvc: func(s *api.Service) {
-				s.Spec.DeprecatedPublicIPs = []string{"127.0.0.1"}
+				s.Spec.ExternalIPs = []string{"127.0.0.1"}
 			},
 			numErrs: 1,
 		},
 		{
 			name: "invalid publicIPs",
 			tweakSvc: func(s *api.Service) {
-				s.Spec.DeprecatedPublicIPs = []string{"0.0.0.0"}
+				s.Spec.ExternalIPs = []string{"0.0.0.0"}
 			},
 			numErrs: 1,
 		},
 		{
-			name: "valid publicIPs host",
+			name: "invalid publicIPs host",
 			tweakSvc: func(s *api.Service) {
-				s.Spec.DeprecatedPublicIPs = []string{"myhost.mydomain"}
+				s.Spec.ExternalIPs = []string{"myhost.mydomain"}
 			},
-			numErrs: 0,
+			numErrs: 1,
 		},
 		{
 			name: "dup port name",
@@ -3199,12 +3226,19 @@ func TestValidateLimitRange(t *testing.T) {
 					api.ResourceMemory: resource.MustParse("10000"),
 				},
 				Min: api.ResourceList{
-					api.ResourceCPU:    resource.MustParse("0"),
+					api.ResourceCPU:    resource.MustParse("5"),
 					api.ResourceMemory: resource.MustParse("100"),
 				},
 				Default: api.ResourceList{
 					api.ResourceCPU:    resource.MustParse("50"),
 					api.ResourceMemory: resource.MustParse("500"),
+				},
+				DefaultRequest: api.ResourceList{
+					api.ResourceCPU:    resource.MustParse("10"),
+					api.ResourceMemory: resource.MustParse("200"),
+				},
+				MaxLimitRequestRatio: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("20"),
 				},
 			},
 		},
@@ -3264,6 +3298,43 @@ func TestValidateLimitRange(t *testing.T) {
 		},
 	}
 
+	invalidSpecRangeDefaultRequestOutsideRange := api.LimitRangeSpec{
+		Limits: []api.LimitRangeItem{
+			{
+				Type: api.LimitTypePod,
+				Max: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("1000"),
+				},
+				Min: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("100"),
+				},
+				DefaultRequest: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("2000"),
+				},
+			},
+		},
+	}
+
+	invalidSpecRangeRequestMoreThanDefaultRange := api.LimitRangeSpec{
+		Limits: []api.LimitRangeItem{
+			{
+				Type: api.LimitTypePod,
+				Max: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("1000"),
+				},
+				Min: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("100"),
+				},
+				Default: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("500"),
+				},
+				DefaultRequest: api.ResourceList{
+					api.ResourceCPU: resource.MustParse("800"),
+				},
+			},
+		},
+	}
+
 	successCases := []api.LimitRange{
 		{
 			ObjectMeta: api.ObjectMeta{
@@ -3311,6 +3382,14 @@ func TestValidateLimitRange(t *testing.T) {
 		"invalid spec default outside range": {
 			api.LimitRange{ObjectMeta: api.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidSpecRangeDefaultOutsideRange},
 			"default value 2k is greater than max value 1k",
+		},
+		"invalid spec defaultrequest outside range": {
+			api.LimitRange{ObjectMeta: api.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidSpecRangeDefaultRequestOutsideRange},
+			"default request value 2k is greater than max value 1k",
+		},
+		"invalid spec defaultrequest more than default": {
+			api.LimitRange{ObjectMeta: api.ObjectMeta{Name: "abc", Namespace: "foo"}, Spec: invalidSpecRangeRequestMoreThanDefaultRange},
+			"default request value 800 is greater than default limit value 500",
 		},
 	}
 	for k, v := range errorCases {
@@ -3948,6 +4027,19 @@ func TestValidateEndpoints(t *testing.T) {
 			},
 			errorType: "FieldValueRequired",
 		},
+		"Address is loopback": {
+			endpoints: api.Endpoints{
+				ObjectMeta: api.ObjectMeta{Name: "mysvc", Namespace: "namespace"},
+				Subsets: []api.EndpointSubset{
+					{
+						Addresses: []api.EndpointAddress{{IP: "127.0.0.1"}},
+						Ports:     []api.EndpointPort{{Name: "p", Port: 93, Protocol: "TCP"}},
+					},
+				},
+			},
+			errorType:   "FieldValueInvalid",
+			errorDetail: "loopback",
+		},
 		"Address is link-local": {
 			endpoints: api.Endpoints{
 				ObjectMeta: api.ObjectMeta{Name: "mysvc", Namespace: "namespace"},
@@ -3960,6 +4052,19 @@ func TestValidateEndpoints(t *testing.T) {
 			},
 			errorType:   "FieldValueInvalid",
 			errorDetail: "link-local",
+		},
+		"Address is link-local multicast": {
+			endpoints: api.Endpoints{
+				ObjectMeta: api.ObjectMeta{Name: "mysvc", Namespace: "namespace"},
+				Subsets: []api.EndpointSubset{
+					{
+						Addresses: []api.EndpointAddress{{IP: "224.0.0.1"}},
+						Ports:     []api.EndpointPort{{Name: "p", Port: 93, Protocol: "TCP"}},
+					},
+				},
+			},
+			errorType:   "FieldValueInvalid",
+			errorDetail: "link-local multicast",
 		},
 	}
 
