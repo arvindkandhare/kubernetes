@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: registry
+  labels:
+    name: registry
+spec:
+  replicas: 1
+  selector:
+    name: registry
+  template:
+    metadata:
+      labels:
+        name: registry
+    spec:
+      containers:
+        - name: registry
+          image: arvindkandhare/registry:v2.0
+          env:   
+             - name: SETTINGS_FLAVOR
+               value: s3
+
+             - name:   AWS_ACCESS_KEY
+               value:  emccode
+
+             - name:   AWS_SECRET_KEY
+               value:  "qUfcCJjQvsbdIE8mNEnpfMau9MJgy62CCLCQ1HAb"
+
+             - name:   AWS_BUCKET
+               value:  "mybucket"
+
+             - name:   S3_ENCRYPT
+               value:  "false"
+
+             - name:   S3_SECURE
+               value:  "false"
+
+             - name:   AWS_REGION
+               value:  "Custom"
+
+             - name:   BUCKET_ENDPOINT
+               value:  "http://130.211.152.105:9020/"
+
+
+#          volumeMounts:
+#            - mountPath: "/host"
+#              name: host
+#            - mountPath: "/data"
+#              name: data
+#            - mountPath: "/opt/storageos/logs"
+#              name: log
+#            - mountPath: "/vagrant"
+#              name: vagrant
+#            - mountPath: "/dae"
+#              name: dae
+#            - mountPath: "/var/run/dbus"
+#              name: dbus
+
+          ports:
+          - containerPort: 5000
+
+#      volumes:
+#          - name: host 
+#            hostPath:
+#               path: "/host"
+#
+#          - name: log 
+#            hostPath:
+#               path: "/var/log/vipr/emcvipr-object"
+#  
+#          - name: data 
+#            hostPath:
+#                path: "/data"
+#
+#
+#          - name: vagrant 
+#            hostPath:
+#                path: "/vagrant"
+#    
+#          - name: dae
+#            hostPath:
+#                path: "/ecs"
+#
+#          - name: dbus
+#            hostPath:
+##                path: "/var/run/dbus"
