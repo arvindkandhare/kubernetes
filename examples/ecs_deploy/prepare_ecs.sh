@@ -15,15 +15,27 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
  echo $hostname;
  zonename=`gcloud compute instances list $hostname | grep minion|cut -f 2 -d " "`
 
- gcloud compute instances attach-disk $hostname --disk data-disk-$DISKID --zone $zonename
- DISKID=$((DISKID+1))
+
+ diskpresent=`gcloud compute disks list data-disk-$DISKID | grep data-disk-$DISKID |wc -l`
+
+ if [ $diskpresent == "0" ] 
+  then
+    gcloud compute disks create "data-disk-$DISKID" --size "512" --zone "us-central1-b" --type "pd-standard"
+ fi
+
+ gcloud compute instances attach-disk $hostname --disk data-disk-$DISKID --zone $zonename --device-name data-disk-$DISKID
+
 
  gcloud compute copy-files ./examples/ecs_deploy/com.emc.vipr.fabric.hal.conf $hostname:/tmp/ --zone $zonename
  gcloud compute copy-files ./examples/ecs_deploy/dbus_service.py $hostname:/tmp/ --zone $zonename
 
  gcloud compute copy-files ./examples/ecs_deploy/gce_hostprep.sh $hostname:/tmp/ --zone $zonename
- gcloud compute ssh  $hostname  "sudo /tmp/gce_hostprep.sh $IPLIST sdb" --zone $zonename 
 
+ devicename=`gcloud compute ssh  $hostname  "sudo ls -ltr /dev/disk/by-id/" --zone $zonename | grep google-data-disk-$DISKID | cut -d \/ -f 3`
+
+ gcloud compute ssh  $hostname  "sudo /tmp/gce_hostprep.sh $IPLIST $devicename" --zone $zonename 
+
+ DISKID=$((DISKID+1))
 
 done
 

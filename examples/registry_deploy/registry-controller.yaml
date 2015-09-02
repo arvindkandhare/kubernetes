@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: registry
-          image: arvindkandhare/registry:v2.0
+          image: arvindkandhare/registry
           env:   
              - name: SETTINGS_FLAVOR
                value: s3
@@ -24,10 +24,10 @@ spec:
                value:  emccode
 
              - name:   AWS_SECRET_KEY
-               value:  "qUfcCJjQvsbdIE8mNEnpfMau9MJgy62CCLCQ1HAb"
+               value:  "sbBXm8HqlZGjH9Kl3gQtjSCmdksgh37bI9jX0MTy"
 
              - name:   AWS_BUCKET
-               value:  "mybucket"
+               value:  "custom"
 
              - name:   S3_ENCRYPT
                value:  "false"
@@ -39,26 +39,12 @@ spec:
                value:  "Custom"
 
              - name:   BUCKET_ENDPOINT
-               value:  "http://130.211.152.105:9020/"
-
-
-#          volumeMounts:
-#            - mountPath: "/host"
-#              name: host
-#            - mountPath: "/data"
-#              name: data
-#            - mountPath: "/opt/storageos/logs"
-#              name: log
-#            - mountPath: "/vagrant"
-#              name: vagrant
-#            - mountPath: "/dae"
-#              name: dae
-#            - mountPath: "/var/run/dbus"
-#              name: dbus
+               value:  "http://104.197.82.195:9020/"
 
           ports:
-          - containerPort: 5000
+#          - containerPort: 5000
 
+# -e AWS_ACCESS_KEY=emccode -e S3_ENCRYPT=false -e S3_SECURE=false -e AWS_BUCKET=custom -e AWS_REGION=Custom  -e BUCKET_ENDPOINT=http://104.197.82.195:9020/ -e AWS_SECRET_KEY=sbBXm8HqlZGjH9Kl3gQtjSCmdksgh37bI9jX0MTy 
 #      volumes:
 #          - name: host 
 #            hostPath:
