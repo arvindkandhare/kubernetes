@@ -15,6 +15,27 @@
 # limitations under the License.
 
 # Ugly hack to do nothing and wait for SIGTERM
+
+mkdir /$AWS_BUCKET
+
+s3fs -d $AWS_BUCKET /$AWS_BUCKET/ -o url=$BUCKET_ENDPOINT -o passwd_file=/data/passwd_file -o f2 -o curldbg
+/usr/local/bin/wrapdocker
+
+echo "root:12345" | chpasswd
+
+if [ ! -d /$AWS_BUCKET/project.git ]; then
+  mkdir /$AWS_BUCKET/project.git
+
+  #chown git:git /$AWS_BUCKET/project.git
+
+  #su git -c "cd /$AWS_BUCKET/project.git;git init --bare"
+  cd /$AWS_BUCKET/project.git
+  git init --bare
+
+fi
+
+/usr/sbin/sshd
+
 while true; do
     read
 done
