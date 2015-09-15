@@ -24,7 +24,7 @@ spec:
                value:  emccode
 
              - name:   AWS_SECRET_KEY
-               value:  "sbBXm8HqlZGjH9Kl3gQtjSCmdksgh37bI9jX0MTy"
+               value:  "EVvoB1IvvbDUgujG7Ibj1rxh1k8ug1cam+AdlnaW"
 
              - name:   AWS_BUCKET
                value:  "custom"
@@ -39,7 +39,7 @@ spec:
                value:  "Custom"
 
              - name:   BUCKET_ENDPOINT
-               value:  "http://104.197.82.195:9020/"
+               value:  "http://146.148.78.227:9020/"
 
           ports:
 #          - containerPort: 5000
