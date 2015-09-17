@@ -24,7 +24,7 @@ spec:
                value:  "test"
 
              - name:   BUCKET_ENDPOINT
-               value:  "http://146.148.78.227:9020/"
+               value:  "http://130.211.170.169:9020/"
 
           ports:
 #          - containerPort: 5000

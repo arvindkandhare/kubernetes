@@ -15,7 +15,11 @@ spec:
     spec:
       containers:
         - name: registry
-          image: arvindkandhare/registry
+          image: arvindkandhare/registry:latest
+          volumeMounts:
+            - mountPath: "/host"
+              name: host
+
           env:   
              - name: SETTINGS_FLAVOR
                value: s3
@@ -41,14 +45,20 @@ spec:
              - name:   BUCKET_ENDPOINT
                value:  "http://146.148.78.227:9020/"
 
+             - name:   REGISTRY_HTTP_TLS_CERTIFICATE
+               value:  "/host/certs/domain.crt" 
+
+             - name:    REGISTRY_HTTP_TLS_KEY
+               value:  "/host/certs/domain.key"
+
           ports:
 #          - containerPort: 5000
 
 # -e AWS_ACCESS_KEY=emccode -e S3_ENCRYPT=false -e S3_SECURE=false -e AWS_BUCKET=custom -e AWS_REGION=Custom  -e BUCKET_ENDPOINT=http://104.197.82.195:9020/ -e AWS_SECRET_KEY=sbBXm8HqlZGjH9Kl3gQtjSCmdksgh37bI9jX0MTy 
-#      volumes:
-#          - name: host 
-#            hostPath:
-#               path: "/host"
+      volumes:
+          - name: host 
+            hostPath:
+               path: "/host"
 #
 #          - name: log 
 #            hostPath:

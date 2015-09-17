@@ -10,6 +10,15 @@ spec:
   - port: 5000
     name: first
 
+  - port: 443
+    name: second
+
+  - port: 80
+    name: third
+
+  - port: 2376
+    name: forth 
+
   type: LoadBalancer
   selector:
     name: registry-service

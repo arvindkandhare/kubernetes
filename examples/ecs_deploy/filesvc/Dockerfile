@@ -1,4 +1,4 @@
-FROM ubuntu
+FROM ubuntu:latest
 
 RUN apt-get update -qq
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libfuse-dev libcurl4-openssl-dev libxml2-dev mime-support automake libtool wget tar
@@ -6,7 +6,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get install -y build-essential libfuse-de
 RUN apt-get install git -y 
 RUN apt-get install -y openssh-server
 RUN mkdir /var/run/sshd
-RUN echo 'root:screencast' | chpasswd
+RUN echo 'root:12345' | chpasswd
 RUN sed -i 's/PermitRootLogin without-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 
 # SSH login fix. Otherwise user is kicked off after login
@@ -34,6 +34,9 @@ RUN chmod +x /usr/local/bin/wrapdocker
 RUN git clone https://github.com/arvindkandhare/s3fs-fuse
 
 RUN cd s3fs-fuse && ./autogen.sh && ./configure --prefix=/usr && make && make install
+
+
+RUN apt-get install -y nfs-kernel-server nfs-common
 
 
 ADD runme /usr/local/bin/

@@ -16,25 +16,70 @@
 
 # Ugly hack to do nothing and wait for SIGTERM
 
-mkdir /$AWS_BUCKET
 
-s3fs -d $AWS_BUCKET /$AWS_BUCKET/ -o url=$BUCKET_ENDPOINT -o passwd_file=/data/passwd_file -o f2 -o curldbg
+## Export the bucket via NFS
+
+set -v
+mkdir -p /share/$AWS_BUCKET
+chmod 777 /share
+
+function start()
+{
+    cat /etc/sysconfig/nfs
+    # prepare /etc/exports
+    for i in "$@"; do
+        echo "$i *(rw,sync,no_root_squash,insecure,no_subtree_check)" >> /etc/exports
+        echo "Serving $i"
+    done
+
+    sudo mount -t nfsd nfsd /proc/fs/nfsd
+    
+    service rpcbind restart
+    service nfs-kernel-server restart
+
+    echo "NFS started"
+}
+
+function stop()
+{
+    echo "Stopping NFS"
+
+    # from /lib/systemd/system/nfs-server.service
+    /usr/sbin/rpc.nfsd 0
+    /usr/sbin/exportfs -au
+    /usr/sbin/exportfs -f
+
+    # from /lib/systemd/system/nfs-mountd.service
+    kill $( pidof rpc.mountd )
+    # from /lib/systemd/system/proc-fs-nfsd.mount
+    umount /proc/fs/nfsd
+
+    echo > /etc/exports
+    exit 0
+}
+
+
+start /share
+
+
 /usr/local/bin/wrapdocker
+s3fs -d $AWS_BUCKET /share/$AWS_BUCKET/ -o url=$BUCKET_ENDPOINT -o passwd_file=/data/passwd_file -o f2 -o curldbg
 
 echo "root:12345" | chpasswd
 
-if [ ! -d /$AWS_BUCKET/project.git ]; then
-  mkdir /$AWS_BUCKET/project.git
+if [ ! -d /share/$AWS_BUCKET/project.git ]; then
+  mkdir /share/$AWS_BUCKET/project.git
 
   #chown git:git /$AWS_BUCKET/project.git
 
-  #su git -c "cd /$AWS_BUCKET/project.git;git init --bare"
-  cd /$AWS_BUCKET/project.git
+  #su git -c "cd /share/$AWS_BUCKET/project.git;git init --bare"
+  cd /share/$AWS_BUCKET/project.git
   git init --bare
 
 fi
 
 /usr/sbin/sshd
+
 
 while true; do
     read
