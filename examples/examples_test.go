@@ -27,7 +27,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
+	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/capabilities"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -194,6 +194,7 @@ func TestExampleObjectSchemas(t *testing.T) {
 		"../examples/glusterfs": {
 			"glusterfs-pod":       &api.Pod{},
 			"glusterfs-endpoints": &api.Endpoints{},
+			"glusterfs-service":   &api.Service{},
 		},
 		"../docs/user-guide/liveness": {
 			"exec-liveness": &api.Pod{},
@@ -236,10 +237,13 @@ func TestExampleObjectSchemas(t *testing.T) {
 		"../docs/user-guide/downward-api": {
 			"dapi-pod": &api.Pod{},
 		},
+		"../docs/user-guide/downward-api/volume/": {
+			"dapi-volume": &api.Pod{},
+		},
 		"../examples/elasticsearch": {
-			"mytunes-namespace": &api.Namespace{},
-			"music-rc":          &api.ReplicationController{},
-			"music-service":     &api.Service{},
+			"es-rc":           &api.ReplicationController{},
+			"es-svc":          &api.Service{},
+			"service-account": nil,
 		},
 		"../examples/explorer": {
 			"pod": &api.Pod{},
@@ -304,7 +308,7 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"redis-sentinel-controller": &api.ReplicationController{},
 			"redis-sentinel-service":    &api.Service{},
 		},
-		"../docs/user-guide/resourcequota": {
+		"../docs/admin/resourcequota": {
 			"namespace": &api.Namespace{},
 			"limits":    &api.LimitRange{},
 			"quota":     &api.ResourceQuota{},
@@ -332,6 +336,10 @@ func TestExampleObjectSchemas(t *testing.T) {
 			"zookeeper-service":       &api.Service{},
 			"zookeeper":               &api.Pod{},
 		},
+		"../examples/cephfs/": {
+			"cephfs":             &api.Pod{},
+			"cephfs-with-secret": &api.Pod{},
+		},
 	}
 
 	capabilities.SetForTests(capabilities.Capabilities{
@@ -358,7 +366,7 @@ func TestExampleObjectSchemas(t *testing.T) {
 				}
 				//TODO: Add validate method for &schedulerapi.Policy
 			} else {
-				if err := latest.Codec.DecodeInto(data, expectedType); err != nil {
+				if err := testapi.Default.Codec().DecodeInto(data, expectedType); err != nil {
 					t.Errorf("%s did not decode correctly: %v\n%s", path, err, string(data))
 					return
 				}
@@ -444,14 +452,14 @@ func TestReadme(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s could not be converted to JSON: %v\n%s", path, err, string(content))
 			}
-			if err := latest.Codec.DecodeInto(json, expectedType); err != nil {
+			if err := testapi.Default.Codec().DecodeInto(json, expectedType); err != nil {
 				t.Errorf("%s did not decode correctly: %v\n%s", path, err, string(content))
 				continue
 			}
 			if errors := validateObject(expectedType); len(errors) > 0 {
 				t.Errorf("%s did not validate correctly: %v", path, errors)
 			}
-			_, err = latest.Codec.Encode(expectedType)
+			_, err = testapi.Default.Codec().Encode(expectedType)
 			if err != nil {
 				t.Errorf("Could not encode object: %v", err)
 				continue

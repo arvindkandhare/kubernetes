@@ -121,6 +121,12 @@ func (fake *fakeIptables) RestoreAll(data []byte, flush iptables.FlushFlag, coun
 	return nil
 }
 
+func (fake *fakeIptables) AddReloadFunc(reloadFunc func()) {
+}
+
+func (fake *fakeIptables) Destroy() {
+}
+
 var tcpServerPort int
 var udpServerPort int
 
@@ -200,12 +206,12 @@ func testEchoUDP(t *testing.T, address string, port int) {
 
 func waitForNumProxyLoops(t *testing.T, p *Proxier, want int32) {
 	var got int32
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 600; i++ {
 		got = atomic.LoadInt32(&p.numProxyLoops)
 		if got == want {
 			return
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	t.Errorf("expected %d ProxyLoops running, got %d", want, got)
 }
@@ -429,6 +435,9 @@ func TestTCPProxyStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error adding new service: %#v", err)
 	}
+	if !svcInfo.isAlive() {
+		t.Fatalf("wrong value for isAlive(): expected true")
+	}
 	conn, err := net.Dial("tcp", joinHostPort("", svcInfo.proxyPort))
 	if err != nil {
 		t.Fatalf("error connecting to proxy: %v", err)
@@ -437,6 +446,9 @@ func TestTCPProxyStop(t *testing.T) {
 	waitForNumProxyLoops(t, p, 1)
 
 	stopProxyByName(p, service)
+	if svcInfo.isAlive() {
+		t.Fatalf("wrong value for isAlive(): expected false")
+	}
 	// Wait for the port to really close.
 	if err := waitForClosedPortTCP(p, svcInfo.proxyPort); err != nil {
 		t.Fatalf(err.Error())

@@ -130,7 +130,6 @@ func (s *Server) InstallDefaultHandlers() {
 	healthz.InstallHandler(s.restfulCont,
 		healthz.PingHealthz,
 		healthz.NamedCheck("docker", s.dockerHealthCheck),
-		healthz.NamedCheck("hostname", s.hostnameHealthCheck),
 		healthz.NamedCheck("syncloop", s.syncLoopHealthCheck),
 	)
 	var ws *restful.WebService
@@ -287,25 +286,6 @@ func (s *Server) dockerHealthCheck(req *http.Request) error {
 	return nil
 }
 
-func (s *Server) hostnameHealthCheck(req *http.Request) error {
-	masterHostname, _, err := net.SplitHostPort(req.Host)
-	if err != nil {
-		if !strings.Contains(req.Host, ":") {
-			masterHostname = req.Host
-		} else {
-			return fmt.Errorf("Could not parse hostname from http request: %v", err)
-		}
-	}
-
-	// Check that the hostname known by the master matches the hostname
-	// the kubelet knows
-	hostname := s.host.GetHostname()
-	if masterHostname != hostname && masterHostname != "127.0.0.1" && masterHostname != "localhost" {
-		return fmt.Errorf("Kubelet hostname \"%v\" does not match the hostname expected by the master \"%v\"", hostname, masterHostname)
-	}
-	return nil
-}
-
 // Checks if kubelet's sync loop  that updates containers is working.
 func (s *Server) syncLoopHealthCheck(req *http.Request) error {
 	duration := s.host.ResyncInterval() * 2
@@ -367,7 +347,7 @@ func (s *Server) getContainerLogs(request *restful.Request, response *restful.Re
 		response.WriteError(http.StatusInternalServerError, fmt.Errorf("unable to convert %v into http.Flusher", response))
 		return
 	}
-	fw := flushwriter.Wrap(response)
+	fw := flushwriter.Wrap(response.ResponseWriter)
 	response.Header().Set("Transfer-Encoding", "chunked")
 	response.WriteHeader(http.StatusOK)
 	err := s.host.GetKubeletContainerLogs(kubecontainer.GetPodFullName(pod), containerName, tail, follow, previous, fw, fw)
@@ -384,7 +364,7 @@ func encodePods(pods []*api.Pod) (data []byte, err error) {
 	for _, pod := range pods {
 		podList.Items = append(podList.Items, *pod)
 	}
-	return latest.Codec.Encode(podList)
+	return latest.GroupOrDie("").Codec.Encode(podList)
 }
 
 // getPods returns a list of pods bound to the Kubelet and their spec.
@@ -563,7 +543,6 @@ WaitForStreams:
 			switch streamType {
 			case api.StreamTypeError:
 				errorStream = stream
-				defer errorStream.Reset()
 				receivedStreams++
 			case api.StreamTypeStdin:
 				stdinStream = stream
@@ -586,11 +565,6 @@ WaitForStreams:
 			glog.Error("Timed out waiting for client to create streams")
 			return nil, nil, nil, nil, nil, false, false
 		}
-	}
-
-	if stdinStream != nil {
-		// close our half of the input stream, since we won't be writing to it
-		stdinStream.Close()
 	}
 
 	return stdinStream, stdoutStream, stderrStream, errorStream, conn, tty, true

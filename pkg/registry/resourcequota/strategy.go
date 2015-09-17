@@ -106,9 +106,8 @@ func MatchResourceQuota(label labels.Selector, field fields.Selector) generic.Ma
 }
 
 // ResourceQuotaToSelectableFields returns a label set that represents the object
-// TODO: fields are not labels, and the validation rules for them do not apply.
 func ResourceQuotaToSelectableFields(resourcequota *api.ResourceQuota) labels.Set {
 	return labels.Set{
-		"name": resourcequota.Name,
+		"metadata.name": resourcequota.Name,
 	}
 }

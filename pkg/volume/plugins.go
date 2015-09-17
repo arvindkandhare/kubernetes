@@ -24,10 +24,11 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
+	"k8s.io/kubernetes/pkg/cloudprovider"
 	"k8s.io/kubernetes/pkg/types"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/kubernetes/pkg/util/validation"
 )
 
 // VolumeOptions contains option information about a volume.
@@ -121,6 +122,9 @@ type VolumeHost interface {
 	// the provided spec.  See comments on NewWrapperBuilder for more
 	// context.
 	NewWrapperCleaner(spec *Spec, podUID types.UID, mounter mount.Interface) (Cleaner, error)
+
+	//Get cloud provider from kubelet
+	GetCloudProvider() cloudprovider.Interface
 }
 
 // VolumePluginMgr tracks registered plugins.
@@ -131,26 +135,71 @@ type VolumePluginMgr struct {
 
 // Spec is an internal representation of a volume.  All API volume types translate to Spec.
 type Spec struct {
-	Name                   string
-	VolumeSource           api.VolumeSource
-	PersistentVolumeSource api.PersistentVolumeSource
-	ReadOnly               bool
+	Volume           *api.Volume
+	PersistentVolume *api.PersistentVolume
+	ReadOnly         bool
+}
+
+// Name returns the name of either Volume or PersistentVolume, one of which must not be nil.
+func (spec *Spec) Name() string {
+	switch {
+	case spec.Volume != nil:
+		return spec.Volume.Name
+	case spec.PersistentVolume != nil:
+		return spec.PersistentVolume.Name
+	default:
+		return ""
+	}
+}
+
+// VolumeConfig is how volume plugins receive configuration.  An instance specific to the plugin will be passed to
+// the plugin's ProbeVolumePlugins(config) func.  Reasonable defaults will be provided by the binary hosting
+// the plugins while allowing override of those default values.  Those config values are then set to an instance of
+// VolumeConfig and passed to the plugin.
+//
+// Values in VolumeConfig are intended to be relevant to several plugins, but not necessarily all plugins.  The
+// preference is to leverage strong typing in this struct.  All config items must have a descriptive but non-specific
+// name (i.e, RecyclerMinimumTimeout is OK but RecyclerMinimumTimeoutForNFS is !OK).  An instance of config will be
+// given directly to the plugin, so config names specific to plugins are unneeded and wrongly expose plugins
+// in this VolumeConfig struct.
+//
+// OtherAttributes is a map of string values intended for one-off configuration of a plugin or config that is only
+// relevant to a single plugin.  All values are passed by string and require interpretation by the plugin.
+// Passing config as strings is the least desirable option but can be used for truly one-off configuration.
+// The binary should still use strong typing for this value when binding CLI values before they are passed as strings
+// in OtherAttributes.
+type VolumeConfig struct {
+	// RecyclerPodTemplate is pod template that understands how to scrub clean a persistent volume after its release.
+	// The template is used by plugins which override specific properties of the pod in accordance with that plugin.
+	// See NewPersistentVolumeRecyclerPodTemplate for the properties that are expected to be overridden.
+	RecyclerPodTemplate *api.Pod
+
+	// RecyclerMinimumTimeout is the minimum amount of time in seconds for the recycler pod's ActiveDeadlineSeconds attribute.
+	// Added to the minimum timeout is the increment per Gi of capacity.
+	RecyclerMinimumTimeout int
+
+	// RecyclerTimeoutIncrement is the number of seconds added to the recycler pod's ActiveDeadlineSeconds for each
+	// Gi of capacity in the persistent volume.
+	// Example: 5Gi volume x 30s increment = 150s + 30s minimum = 180s ActiveDeadlineSeconds for recycler pod
+	RecyclerTimeoutIncrement int
+
+	// OtherAttributes stores config as strings.  These strings are opaque to the system and only understood by the binary
+	// hosting the plugin and the plugin itself.
+	OtherAttributes map[string]string
 }
 
 // NewSpecFromVolume creates an Spec from an api.Volume
 func NewSpecFromVolume(vs *api.Volume) *Spec {
 	return &Spec{
-		Name:         vs.Name,
-		VolumeSource: vs.VolumeSource,
+		Volume: vs,
 	}
 }
 
 // NewSpecFromPersistentVolume creates an Spec from an api.PersistentVolume
 func NewSpecFromPersistentVolume(pv *api.PersistentVolume, readOnly bool) *Spec {
 	return &Spec{
-		Name: pv.Name,
-		PersistentVolumeSource: pv.Spec.PersistentVolumeSource,
-		ReadOnly:               readOnly,
+		PersistentVolume: pv,
+		ReadOnly:         readOnly,
 	}
 }
 
@@ -168,7 +217,7 @@ func (pm *VolumePluginMgr) InitPlugins(plugins []VolumePlugin, host VolumeHost) 
 	allErrs := []error{}
 	for _, plugin := range plugins {
 		name := plugin.Name()
-		if !util.IsQualifiedName(name) {
+		if !validation.IsQualifiedName(name) {
 			allErrs = append(allErrs, fmt.Errorf("volume plugin has invalid name: %#v", plugin))
 			continue
 		}
@@ -265,4 +314,50 @@ func (pm *VolumePluginMgr) FindRecyclablePluginBySpec(spec *Spec) (RecyclableVol
 		return recyclableVolumePlugin, nil
 	}
 	return nil, fmt.Errorf("no recyclable volume plugin matched")
+}
+
+// NewPersistentVolumeRecyclerPodTemplate creates a template for a recycler pod.  By default, a recycler pod simply runs
+// "rm -rf" on a volume and tests for emptiness.  Most attributes of the template will be correct for most
+// plugin implementations.  The following attributes can be overridden per plugin via configuration:
+//
+// 1.  pod.Spec.Volumes[0].VolumeSource must be overridden.  Recycler implementations without a valid VolumeSource will fail.
+// 2.  pod.GenerateName helps distinguish recycler pods by name.  Recommended. Default is "pv-recycler-".
+// 3.  pod.Spec.ActiveDeadlineSeconds gives the recycler pod a maximum timeout before failing.  Recommended.  Default is 60 seconds.
+//
+// See HostPath and NFS for working recycler examples
+func NewPersistentVolumeRecyclerPodTemplate() *api.Pod {
+	timeout := int64(60)
+	pod := &api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			GenerateName: "pv-recycler-",
+			Namespace:    api.NamespaceDefault,
+		},
+		Spec: api.PodSpec{
+			ActiveDeadlineSeconds: &timeout,
+			RestartPolicy:         api.RestartPolicyNever,
+			Volumes: []api.Volume{
+				{
+					Name: "vol",
+					// IMPORTANT!  All plugins using this template MUST override pod.Spec.Volumes[0].VolumeSource
+					// Recycler implementations without a valid VolumeSource will fail.
+					VolumeSource: api.VolumeSource{},
+				},
+			},
+			Containers: []api.Container{
+				{
+					Name:    "pv-recycler",
+					Image:   "gcr.io/google_containers/busybox",
+					Command: []string{"/bin/sh"},
+					Args:    []string{"-c", "test -e /scrub && echo $(date) > /scrub/trash.txt && rm -rf /scrub/* /scrub/.* && test -z \"$(ls -A /scrub)\" || exit 1"},
+					VolumeMounts: []api.VolumeMount{
+						{
+							Name:      "vol",
+							MountPath: "/scrub",
+						},
+					},
+				},
+			},
+		},
+	}
+	return pod
 }

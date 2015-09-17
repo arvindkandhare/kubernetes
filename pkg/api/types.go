@@ -224,6 +224,14 @@ type VolumeSource struct {
 	PersistentVolumeClaim *PersistentVolumeClaimVolumeSource `json:"persistentVolumeClaim,omitempty"`
 	// RBD represents a Rados Block Device mount on the host that shares a pod's lifetime
 	RBD *RBDVolumeSource `json:"rbd,omitempty"`
+	// Cinder represents a cinder volume attached and mounted on kubelets host machine
+	Cinder *CinderVolumeSource `json:"cinder,omitempty"`
+
+	// CephFS represents a Cephfs mount on the host that shares a pod's lifetime
+	CephFS *CephFSVolumeSource `json:"cephfs,omitempty"`
+
+	// DownwardAPI represents metadata about the pod that should populate this volume
+	DownwardAPI *DownwardAPIVolumeSource `json:"downwardAPI,omitempty"`
 }
 
 // Similar to VolumeSource but meant for the administrator who creates PVs.
@@ -248,6 +256,10 @@ type PersistentVolumeSource struct {
 	// ISCSIVolumeSource represents an ISCSI resource that is attached to a
 	// kubelet's host machine and then exposed to the pod.
 	ISCSI *ISCSIVolumeSource `json:"iscsi,omitempty"`
+	// Cinder represents a cinder volume attached and mounted on kubelets host machine
+	Cinder *CinderVolumeSource `json:"cinder,omitempty"`
+	// CephFS represents a Ceph FS mount on the host that shares a pod's lifetime
+	CephFS *CephFSVolumeSource `json:"cephfs,omitempty"`
 }
 
 type PersistentVolumeClaimVolumeSource struct {
@@ -314,7 +326,7 @@ type PersistentVolumeStatus struct {
 type PersistentVolumeList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items    []PersistentVolume `json:"items,omitempty"`
+	Items    []PersistentVolume `json:"items"`
 }
 
 // PersistentVolumeClaim is a user's request for and claim to a persistent volume
@@ -332,7 +344,7 @@ type PersistentVolumeClaim struct {
 type PersistentVolumeClaimList struct {
 	TypeMeta `json:",inline"`
 	ListMeta `json:"metadata,omitempty"`
-	Items    []PersistentVolumeClaim `json:"items,omitempty"`
+	Items    []PersistentVolumeClaim `json:"items"`
 }
 
 // PersistentVolumeClaimSpec describes the common attributes of storage devices
@@ -558,6 +570,50 @@ type RBDVolumeSource struct {
 	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
+// CinderVolumeSource represents a cinder volume resource in Openstack.
+// A Cinder volume must exist and be formatted before mounting to a container.
+// The volume must also be in the same region as the kubelet.
+type CinderVolumeSource struct {
+	// Unique id of the volume used to identify the cinder volume
+	VolumeID string `json:"volumeID"`
+	// Required: Filesystem type to mount.
+	// Must be a filesystem type supported by the host operating system.
+	// Only ext3 and ext4 are allowed
+	FSType string `json:"fsType,omitempty"`
+	// Optional: Defaults to false (read/write). ReadOnly here will force
+	// the ReadOnly setting in VolumeMounts.
+	ReadOnly bool `json:"readOnly,omitempty"`
+}
+
+// CephFSVolumeSource represents a Ceph Filesystem Mount that lasts the lifetime of a pod
+type CephFSVolumeSource struct {
+	// Required: Monitors is a collection of Ceph monitors
+	Monitors []string `json:"monitors"`
+	// Optional: User is the rados user name, default is admin
+	User string `json:"user,omitempty"`
+	// Optional: SecretFile is the path to key ring for User, default is /etc/ceph/user.secret
+	SecretFile string `json:"secretFile,omitempty"`
+	// Optional: SecretRef is reference to the authentication secret for User, default is empty.
+	SecretRef *LocalObjectReference `json:"secretRef,omitempty"`
+	// Optional: Defaults to false (read/write). ReadOnly here will force
+	// the ReadOnly setting in VolumeMounts.
+	ReadOnly bool `json:"readOnly,omitempty"`
+}
+
+// DownwardAPIVolumeSource represents a volume containing downward API info
+type DownwardAPIVolumeSource struct {
+	// Items is a list of DownwardAPIVolume file
+	Items []DownwardAPIVolumeFile `json:"items,omitempty"`
+}
+
+// DownwardAPIVolumeFile represents a single file containing information from the downward API
+type DownwardAPIVolumeFile struct {
+	// Required: Path is  the relative path name of the file to be created. Must not be absolute or contain the '..' path. Must be utf-8 encoded. The first item of the relative path must not start with '..'
+	Path string `json:"path"`
+	// Required: Selects a field of the pod: only annotations, labels, name and  namespace are supported.
+	FieldRef ObjectFieldSelector `json:"fieldRef"`
+}
+
 // ContainerPort represents a network port in a single container
 type ContainerPort struct {
 	// Optional: If specified, this must be an IANA_SVC_NAME  Each named port
@@ -779,8 +835,10 @@ const (
 )
 
 type ContainerStateWaiting struct {
-	// Reason could be pulling image,
+	// A brief CamelCase string indicating details about why the container is in waiting state.
 	Reason string `json:"reason,omitempty"`
+	// A human-readable message indicating details about why the container is in waiting state.
+	Message string `json:"message,omitempty"`
 }
 
 type ContainerStateRunning struct {
@@ -922,10 +980,13 @@ type PodSpec struct {
 	// the scheduler simply schedules this pod onto that node, assuming that it fits resource
 	// requirements.
 	NodeName string `json:"nodeName,omitempty"`
-	// Uses the host's network namespace. If this option is set, the ports that will be
+	// Use the host's network namespace. If this option is set, the ports that will be
 	// used must be specified.
 	// Optional: Default to false.
 	HostNetwork bool `json:"hostNetwork,omitempty"`
+	// Use the host's pid namespace.
+	// Optional: Default to false.
+	HostPID bool `json:"hostPID,omitempty"`
 	// ImagePullSecrets is an optional list of references to secrets in the same namespace to use for pulling any of the images used by this PodSpec.
 	// If specified, these secrets will be passed to individual puller implementations for them to use.  For example,
 	// in the case of docker, only DockerConfig type secrets are honored.
@@ -1058,54 +1119,6 @@ type ReplicationControllerList struct {
 	Items []ReplicationController `json:"items"`
 }
 
-// DaemonSpec is the specification of a daemon.
-type DaemonSpec struct {
-	// Selector is a label query over pods that are managed by the daemon.
-	Selector map[string]string `json:"selector"`
-
-	// Template is the object that describes the pod that will be created.
-	// The Daemon will create exactly one copy of this pod on every node
-	// that matches the template's node selector (or on every node if no node
-	// selector is specified).
-	Template *PodTemplateSpec `json:"template,omitempty"`
-}
-
-// DaemonStatus represents the current status of a daemon.
-type DaemonStatus struct {
-	// CurrentNumberScheduled is the number of nodes that are running exactly 1 copy of the
-	// daemon and are supposed to run the daemon.
-	CurrentNumberScheduled int `json:"currentNumberScheduled"`
-
-	// NumberMisscheduled is the number of nodes that are running the daemon, but are
-	// not supposed to run the daemon.
-	NumberMisscheduled int `json:"numberMisscheduled"`
-
-	// DesiredNumberScheduled is the total number of nodes that should be running the daemon
-	// (including nodes correctly running the daemon).
-	DesiredNumberScheduled int `json:"desiredNumberScheduled"`
-}
-
-// Daemon represents the configuration of a daemon.
-type Daemon struct {
-	TypeMeta   `json:",inline"`
-	ObjectMeta `json:"metadata,omitempty"`
-
-	// Spec defines the desired behavior of this daemon.
-	Spec DaemonSpec `json:"spec,omitempty"`
-
-	// Status is the current status of this daemon. This data may be
-	// out of date by some window of time.
-	Status DaemonStatus `json:"status,omitempty"`
-}
-
-// DaemonList is a collection of daemon.
-type DaemonList struct {
-	TypeMeta `json:",inline"`
-	ListMeta `json:"metadata,omitempty"`
-
-	Items []Daemon `json:"items"`
-}
-
 const (
 	// ClusterIPNone - do not assign a cluster IP
 	// no proxying required and no environment variables should be created for pods
@@ -1177,6 +1190,9 @@ type LoadBalancerIngress struct {
 
 // ServiceSpec describes the attributes that a user creates on a service
 type ServiceSpec struct {
+	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
+	Type ServiceType `json:"type,omitempty"`
+
 	// Required: The list of ports that are exposed by this service.
 	Ports []ServicePort `json:"ports"`
 
@@ -1192,12 +1208,16 @@ type ServiceSpec struct {
 	// None can be specified for headless services when proxying is not required
 	ClusterIP string `json:"clusterIP,omitempty"`
 
-	// Type determines how the service will be exposed.  Valid options: ClusterIP, NodePort, LoadBalancer
-	Type ServiceType `json:"type,omitempty"`
-
 	// ExternalIPs are used by external load balancers, or can be set by
 	// users to handle external traffic that arrives at a node.
 	ExternalIPs []string `json:"externalIPs,omitempty"`
+
+	// Only applies to Service Type: LoadBalancer
+	// LoadBalancer will get created with the IP specified in this field.
+	// This feature depends on whether the underlying cloud-provider supports specifying
+	// the loadBalancerIP when a load balancer is created.
+	// This field will be ignored if the cloud-provider does not support the feature.
+	LoadBalancerIP string `json:"loadBalancerIP,omitempty"`
 
 	// Required: Supports "ClientIP" and "None".  Used to maintain session affinity.
 	SessionAffinity ServiceAffinity `json:"sessionAffinity,omitempty"`
@@ -1349,23 +1369,35 @@ type NodeSpec struct {
 	Unschedulable bool `json:"unschedulable,omitempty"`
 }
 
+// DaemonEndpoint contains information about a single Daemon endpoint.
+type DaemonEndpoint struct {
+	// Port number of the given endpoint.
+	Port int `json:port`
+}
+
+// NodeDaemonEndpoints lists ports opened by daemons running on the Node.
+type NodeDaemonEndpoints struct {
+	// Endpoint on which Kubelet is listening.
+	KubeletEndpoint DaemonEndpoint `json:"kubeletEndpoint,omitempty"`
+}
+
 // NodeSystemInfo is a set of ids/uuids to uniquely identify the node.
 type NodeSystemInfo struct {
-	// MachineID is the machine-id reported by the node
+	// Machine ID reported by the node.
 	MachineID string `json:"machineID"`
-	// SystemUUID is the system-uuid reported by the node
+	// System UUID reported by the node.
 	SystemUUID string `json:"systemUUID"`
-	// BootID is the boot-id reported by the node
+	// Boot ID reported by the node.
 	BootID string `json:"bootID"`
-	// Kernel version reported by the node
+	// Kernel Version reported by the node.
 	KernelVersion string `json:"kernelVersion"`
-	// OS image used reported by the node
+	// OS Image reported by the node.
 	OsImage string `json:"osImage"`
-	// Container runtime version reported by the node
+	// ContainerRuntime Version reported by the node.
 	ContainerRuntimeVersion string `json:"containerRuntimeVersion"`
-	// Kubelet version reported by the node
+	// Kubelet Version reported by the node.
 	KubeletVersion string `json:"kubeletVersion"`
-	// Kube-proxy version reported by the node
+	// KubeProxy Version reported by the node.
 	KubeProxyVersion string `json:"kubeProxyVersion"`
 }
 
@@ -1379,7 +1411,9 @@ type NodeStatus struct {
 	Conditions []NodeCondition `json:"conditions,omitempty"`
 	// Queried from cloud provider, if available.
 	Addresses []NodeAddress `json:"addresses,omitempty"`
-	// NodeSystemInfo is a set of ids/uuids to uniquely identify the node
+	// Endpoints of daemons running on the Node.
+	DaemonEndpoints NodeDaemonEndpoints `json:"daemonEndpoints,omitempty"`
+	// Set of ids/uuids to uniquely identify the node.
 	NodeInfo NodeSystemInfo `json:"nodeInfo,omitempty"`
 }
 
@@ -1982,8 +2016,6 @@ const (
 	ResourceServices ResourceName = "services"
 	// ReplicationControllers, number
 	ResourceReplicationControllers ResourceName = "replicationcontrollers"
-	// Daemon, number
-	ResourceDaemon ResourceName = "daemon"
 	// ResourceQuotas, number
 	ResourceQuotas ResourceName = "resourcequotas"
 	// ResourceSecrets, number

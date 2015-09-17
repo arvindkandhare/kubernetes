@@ -53,7 +53,7 @@ type PodStorage struct {
 
 // REST implements a RESTStorage for pods against etcd
 type REST struct {
-	etcdgeneric.Etcd
+	*etcdgeneric.Etcd
 }
 
 // NewStorage returns a RESTStorage object that will work against pods.
@@ -92,19 +92,19 @@ func NewStorage(s storage.Interface, useCacher bool, k client.ConnectionInfoGett
 		},
 		EndpointName: "pods",
 
+		CreateStrategy:      pod.Strategy,
+		UpdateStrategy:      pod.Strategy,
+		DeleteStrategy:      pod.Strategy,
+		ReturnDeletedObject: true,
+
 		Storage: storageInterface,
 	}
 	statusStore := *store
 
-	store.CreateStrategy = pod.Strategy
-	store.UpdateStrategy = pod.Strategy
-	store.DeleteStrategy = pod.Strategy
-	store.ReturnDeletedObject = true
-
 	statusStore.UpdateStrategy = pod.StatusStrategy
 
 	return PodStorage{
-		Pod:         &REST{*store},
+		Pod:         &REST{store},
 		Binding:     &BindingREST{store: store},
 		Status:      &StatusREST{store: &statusStore},
 		Log:         &LogREST{store: store, kubeletConn: k},
@@ -150,8 +150,8 @@ func (r *BindingREST) Create(ctx api.Context, obj runtime.Object) (out runtime.O
 	return
 }
 
-// setPodHostAndAnnotations sets the given pod's host to 'machine' iff it was previously 'oldMachine' and merges
-// the provided annotations with those of the pod.
+// setPodHostAndAnnotations sets the given pod's host to 'machine' if and only if it was
+// previously 'oldMachine' and merges the provided annotations with those of the pod.
 // Returns the current state of the pod, or an error.
 func (r *BindingREST) setPodHostAndAnnotations(ctx api.Context, podID, oldMachine, machine string, annotations map[string]string) (finalPod *api.Pod, err error) {
 	podKey, err := r.store.KeyFunc(ctx, podID)

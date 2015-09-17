@@ -175,7 +175,7 @@ sudo docker run -d --net=host --privileged gcr.io/google_containers/hyperkube:v1
 
 At this point, you should have a functioning 1-node cluster.  Let's test it out!
 
-Download the kubectl binary
+Download the kubectl binary and make it available by editing your PATH ENV.
 ([OS X](http://storage.googleapis.com/kubernetes-release/release/v1.0.1/bin/darwin/amd64/kubectl))
 ([linux](http://storage.googleapis.com/kubernetes-release/release/v1.0.1/bin/linux/amd64/kubectl))
 
@@ -193,7 +193,7 @@ NAME        LABELS                             STATUS
 ```
 
 If the status of the node is `NotReady` or `Unknown` please check that all of the containers you created are successfully running.
-If all else fails, ask questions on IRC at [#google-containers](http://webchat.freenode.net/?channels=google-containers).
+If all else fails, ask questions on [Slack](../../troubleshooting.md#slack).
 
 
 ### Next steps

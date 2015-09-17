@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -90,7 +91,6 @@ var _ = Describe("Kubectl client", func() {
 			nautilusPath = filepath.Join(updateDemoRoot, "nautilus-rc.yaml")
 			kittenPath = filepath.Join(updateDemoRoot, "kitten-rc.yaml")
 		})
-
 		It("should create and stop a replication controller", func() {
 			defer cleanup(nautilusPath, ns, updateDemoSelector)
 
@@ -159,11 +159,43 @@ var _ = Describe("Kubectl client", func() {
 		It("should support exec", func() {
 			By("executing a command in the container")
 			execOutput := runKubectl("exec", fmt.Sprintf("--namespace=%v", ns), simplePodName, "echo", "running", "in", "container")
-			expectedExecOutput := "running in container"
-			if execOutput != expectedExecOutput {
-				Failf("Unexpected kubectl exec output. Wanted '%s', got '%s'", execOutput, expectedExecOutput)
+			if e, a := "running in container", execOutput; e != a {
+				Failf("Unexpected kubectl exec output. Wanted %q, got %q", e, a)
+			}
+
+			By("executing a command in the container with noninteractive stdin")
+			execOutput = newKubectlCommand("exec", fmt.Sprintf("--namespace=%v", ns), "-i", simplePodName, "cat").
+				withStdinData("abcd1234").
+				exec()
+			if e, a := "abcd1234", execOutput; e != a {
+				Failf("Unexpected kubectl exec output. Wanted %q, got %q", e, a)
+			}
+
+			// pretend that we're a user in an interactive shell
+			r, c, err := newBlockingReader("echo hi\nexit\n")
+			if err != nil {
+				Failf("Error creating blocking reader: %v", err)
+			}
+			// NOTE this is solely for test cleanup!
+			defer c.Close()
+
+			By("executing a command in the container with pseudo-interactive stdin")
+			execOutput = newKubectlCommand("exec", fmt.Sprintf("--namespace=%v", ns), "-i", simplePodName, "bash").
+				withStdinReader(r).
+				exec()
+			if e, a := "hi", execOutput; e != a {
+				Failf("Unexpected kubectl exec output. Wanted %q, got %q", e, a)
 			}
 		})
+
+		It("should support inline execution and attach", func() {
+			By("executing a command with run and attach")
+			runOutput := runKubectl(fmt.Sprintf("--namespace=%v", ns), "run", "run-test", "--image=busybox", "--restart=Never", "--attach=true", "echo", "running", "in", "container")
+			expectedRunOutput := "running in container"
+			Expect(runOutput).To(ContainSubstring(expectedRunOutput))
+			// everything in the ns will be deleted at the end of the test
+		})
+
 		It("should support port-forward", func() {
 			By("forwarding the container port to a local port")
 			cmd := kubectlCmd("port-forward", fmt.Sprintf("--namespace=%v", ns), simplePodName, fmt.Sprintf(":%d", simplePodPort))
@@ -290,9 +322,9 @@ var _ = Describe("Kubectl client", func() {
 			checkOutput(output, requiredStrings)
 
 			// Node
-			minions, err := c.Nodes().List(labels.Everything(), fields.Everything())
+			nodes, err := c.Nodes().List(labels.Everything(), fields.Everything())
 			Expect(err).NotTo(HaveOccurred())
-			node := minions.Items[0]
+			node := nodes.Items[0]
 			output = runKubectl("describe", "node", node.Name)
 			requiredStrings = [][]string{
 				{"Name:", node.Name},
@@ -332,7 +364,6 @@ var _ = Describe("Kubectl client", func() {
 			nsFlag := fmt.Sprintf("--namespace=%v", ns)
 
 			redisPort := 6379
-			serviceTimeout := 60 * time.Second
 
 			By("creating Redis RC")
 			runKubectl("create", "-f", controllerJson, nsFlag)
@@ -343,7 +374,10 @@ var _ = Describe("Kubectl client", func() {
 				endpointFound := false
 				for t := time.Now(); time.Since(t) < timeout; time.Sleep(poll) {
 					endpoints, err := c.Endpoints(ns).Get(name)
-					Expect(err).NotTo(HaveOccurred())
+					if err != nil {
+						Logf("Get endpoints failed (%v elapsed, ignoring for %v): %v", time.Since(t), poll, err)
+						continue
+					}
 
 					uidToPort := getContainerPortsByPodUID(endpoints)
 					if len(uidToPort) == 0 {
@@ -351,7 +385,7 @@ var _ = Describe("Kubectl client", func() {
 						continue
 					}
 					if len(uidToPort) > 1 {
-						Fail("To many endpoints found")
+						Fail("Too many endpoints found")
 					}
 					for _, port := range uidToPort {
 						if port[0] != redisPort {
@@ -381,13 +415,13 @@ var _ = Describe("Kubectl client", func() {
 
 			By("exposing RC")
 			runKubectl("expose", "rc", "redis-master", "--name=rm2", "--port=1234", fmt.Sprintf("--target-port=%d", redisPort), nsFlag)
-			waitForService(c, ns, "rm2", true, poll, serviceTimeout)
-			validateService("rm2", 1234, serviceTimeout)
+			waitForService(c, ns, "rm2", true, poll, serviceStartTimeout)
+			validateService("rm2", 1234, serviceStartTimeout)
 
 			By("exposing service")
 			runKubectl("expose", "service", "rm2", "--name=rm3", "--port=2345", fmt.Sprintf("--target-port=%d", redisPort), nsFlag)
-			waitForService(c, ns, "rm3", true, poll, serviceTimeout)
-			validateService("rm3", 2345, serviceTimeout)
+			waitForService(c, ns, "rm3", true, poll, serviceStartTimeout)
+			validateService("rm3", 2345, serviceStartTimeout)
 		})
 	})
 
@@ -747,7 +781,7 @@ func makeRequestToGuestbook(c *client.Client, cmd, value string, ns string) (str
 		Namespace(ns).
 		Resource("services").
 		Name("frontend").
-		Suffix("/index.php").
+		Suffix("/guestbook.php").
 		Param("cmd", cmd).
 		Param("key", "messages").
 		Param("value", value).
@@ -791,4 +825,21 @@ func getUDData(jpgExpected string, ns string) func(*client.Client, string) error
 			return errors.New(fmt.Sprintf("data served up in container is inaccurate, %s didn't contain %s", data, jpgExpected))
 		}
 	}
+}
+
+// newBlockingReader returns a reader that allows reading the given string,
+// then blocks until Close() is called on the returned closer.
+//
+// We're explicitly returning the reader and closer separately, because
+// the closer needs to be the *os.File we get from os.Pipe(). This is required
+// so the exec of kubectl can pass the underlying file descriptor to the exec
+// syscall, instead of creating another os.Pipe and blocking on the io.Copy
+// between the source (e.g. stdin) and the write half of the pipe.
+func newBlockingReader(s string) (io.Reader, io.Closer, error) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	w.Write([]byte(s))
+	return r, w, nil
 }

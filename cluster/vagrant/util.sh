@@ -148,12 +148,13 @@ function create-provision-scripts {
     echo "DNS_REPLICAS='${DNS_REPLICAS:-}'"
     echo "RUNTIME_CONFIG='${RUNTIME_CONFIG:-}'"
     echo "ADMISSION_CONTROL='${ADMISSION_CONTROL:-}'"
-    echo "DOCKER_OPTS='${EXTRA_DOCKER_OPTS-}'"
+    echo "DOCKER_OPTS='${EXTRA_DOCKER_OPTS:-}'"
     echo "VAGRANT_DEFAULT_PROVIDER='${VAGRANT_DEFAULT_PROVIDER:-}'"
     echo "KUBELET_TOKEN='${KUBELET_TOKEN:-}'"
     echo "KUBE_PROXY_TOKEN='${KUBE_PROXY_TOKEN:-}'"
     echo "MASTER_EXTRA_SANS='${MASTER_EXTRA_SANS:-}'"
-    awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network.sh"
+    echo "ENABLE_CPU_CFS_QUOTA='${ENABLE_CPU_CFS_QUOTA}'"
+    awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network-master.sh"
     awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-master.sh"
   ) > "${KUBE_TEMP}/master-start.sh"
 
@@ -173,12 +174,12 @@ function create-provision-scripts {
       echo "CONTAINER_NETMASK='${MINION_CONTAINER_NETMASKS[$i]}'"
       echo "MINION_CONTAINER_SUBNETS=(${MINION_CONTAINER_SUBNETS[@]})"
       echo "CONTAINER_SUBNET='${CONTAINER_SUBNET}'"
-      echo "DOCKER_OPTS='${EXTRA_DOCKER_OPTS-}'"
+      echo "DOCKER_OPTS='${EXTRA_DOCKER_OPTS:-}'"
       echo "VAGRANT_DEFAULT_PROVIDER='${VAGRANT_DEFAULT_PROVIDER:-}'"
       echo "KUBELET_TOKEN='${KUBELET_TOKEN:-}'"
       echo "KUBE_PROXY_TOKEN='${KUBE_PROXY_TOKEN:-}'"
       echo "MASTER_EXTRA_SANS='${MASTER_EXTRA_SANS:-}'"
-      awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network.sh"
+      awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-network-minion.sh"
       awk '!/^#/' "${KUBE_ROOT}/cluster/vagrant/provision-minion.sh"
     ) > "${KUBE_TEMP}/minion-start-${i}.sh"
   done
@@ -198,6 +199,9 @@ function verify-cluster {
   local machine="master"
   local -a required_daemon=("salt-master" "salt-minion" "kubelet")
   local validated="1"
+  # This is a hack, but sometimes the salt-minion gets stuck on the master, so we just restart it
+  # to ensure that users never wait forever
+  vagrant ssh "$machine" -c "sudo systemctl restart salt-minion"
   until [[ "$validated" == "0" ]]; do
     validated="0"
     local daemon
@@ -237,7 +241,7 @@ function verify-cluster {
     local count="0"
     until [[ "$count" == "1" ]]; do
       local minions
-      minions=$("${KUBE_ROOT}/cluster/kubectl.sh" get nodes -o template -t '{{range.items}}{{.metadata.name}}:{{end}}' --api-version=v1)
+      minions=$("${KUBE_ROOT}/cluster/kubectl.sh" get nodes -o go-template='{{range.items}}{{.metadata.name}}:{{end}}' --api-version=v1)
       count=$(echo $minions | grep -c "${MINION_IPS[i]}") || {
         printf "."
         sleep 2

@@ -17,6 +17,7 @@ limitations under the License.
 package testing
 
 import (
+	"fmt"
 	"math/rand"
 	"reflect"
 	"strconv"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/registered"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
@@ -119,8 +121,23 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 			c.FuzzNoCustom(j) // fuzz self without calling this function again
 			//j.TemplateRef = nil // this is required for round trip
 		},
-		func(j *api.DaemonSpec, c fuzz.Continue) {
+		func(j *experimental.DeploymentStrategy, c fuzz.Continue) {
 			c.FuzzNoCustom(j) // fuzz self without calling this function again
+			// Ensure that strategyType is one of valid values.
+			strategyTypes := []experimental.DeploymentType{experimental.DeploymentRecreate, experimental.DeploymentRollingUpdate}
+			j.Type = strategyTypes[c.Rand.Intn(len(strategyTypes))]
+			if j.Type != experimental.DeploymentRollingUpdate {
+				j.RollingUpdate = nil
+			} else {
+				rollingUpdate := experimental.RollingUpdateDeployment{}
+				if c.RandBool() {
+					rollingUpdate.MaxUnavailable = util.NewIntOrStringFromInt(int(c.RandUint64()))
+					rollingUpdate.MaxSurge = util.NewIntOrStringFromInt(int(c.RandUint64()))
+				} else {
+					rollingUpdate.MaxSurge = util.NewIntOrStringFromString(fmt.Sprintf("%d%%", c.RandUint64()))
+				}
+				j.RollingUpdate = &rollingUpdate
+			}
 		},
 		func(j *api.List, c fuzz.Continue) {
 			c.FuzzNoCustom(j) // fuzz self without calling this function again
@@ -219,7 +236,18 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 			i := int(c.RandUint64() % uint64(v.NumField()))
 			v = v.Field(i).Addr()
 			// Use a new fuzzer which cannot populate nil to ensure one field will be set.
-			fuzz.New().NilChance(0).NumElements(1, 1).Fuzz(v.Interface())
+			f := fuzz.New().NilChance(0).NumElements(1, 1)
+			f.Funcs(
+				// Only api.DownwardAPIVolumeFile needs to have a specific func since FieldRef has to be
+				// defaulted to a version otherwise roundtrip will fail
+				// For the remaining volume plugins the default fuzzer is enough.
+				func(m *api.DownwardAPIVolumeFile, c fuzz.Continue) {
+					m.Path = c.RandString()
+					versions := []string{"v1"}
+					m.FieldRef.APIVersion = versions[c.Rand.Intn(len(versions))]
+					m.FieldRef.FieldPath = c.RandString()
+				},
+			).Fuzz(v.Interface())
 		},
 		func(d *api.DNSPolicy, c fuzz.Continue) {
 			policies := []api.DNSPolicy{api.DNSClusterFirst, api.DNSDefault}
@@ -322,6 +350,11 @@ func FuzzerFor(t *testing.T, version string, src rand.Source) *fuzz.Fuzzer {
 		func(n *api.Node, c fuzz.Continue) {
 			c.FuzzNoCustom(n)
 			n.Spec.ExternalID = "external"
+		},
+		func(s *experimental.APIVersion, c fuzz.Continue) {
+			// We can't use c.RandString() here because it may generate empty
+			// string, which will cause tests failure.
+			s.APIGroup = "something"
 		},
 	)
 	return f

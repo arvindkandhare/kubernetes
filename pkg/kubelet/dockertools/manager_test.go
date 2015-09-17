@@ -34,7 +34,7 @@ import (
 	cadvisorApi "github.com/google/cadvisor/info/v1"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
+	"k8s.io/kubernetes/pkg/client/record"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/network"
 	kubeprober "k8s.io/kubernetes/pkg/kubelet/prober"
@@ -42,6 +42,7 @@ import (
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
 	uexec "k8s.io/kubernetes/pkg/util/exec"
+	"k8s.io/kubernetes/pkg/util/sets"
 )
 
 type fakeHTTP struct {
@@ -74,7 +75,7 @@ func (*fakeOptionGenerator) GenerateRunContainerOptions(pod *api.Pod, container 
 }
 
 func newTestDockerManagerWithHTTPClient(fakeHTTPClient *fakeHTTP) (*DockerManager, *FakeDockerClient) {
-	fakeDocker := &FakeDockerClient{VersionInfo: docker.Env{"Version=1.1.3", "ApiVersion=1.15"}, Errors: make(map[string]error), RemovedImages: util.StringSet{}}
+	fakeDocker := &FakeDockerClient{VersionInfo: docker.Env{"Version=1.1.3", "ApiVersion=1.15"}, Errors: make(map[string]error), RemovedImages: sets.String{}}
 	fakeRecorder := &record.FakeRecorder{}
 	readinessManager := kubecontainer.NewReadinessManager()
 	containerRefManager := kubecontainer.NewRefManager()
@@ -324,14 +325,14 @@ func TestGetPods(t *testing.T) {
 func TestListImages(t *testing.T) {
 	manager, fakeDocker := newTestDockerManager()
 	dockerImages := []docker.APIImages{{ID: "1111"}, {ID: "2222"}, {ID: "3333"}}
-	expected := util.NewStringSet([]string{"1111", "2222", "3333"}...)
+	expected := sets.NewString([]string{"1111", "2222", "3333"}...)
 
 	fakeDocker.Images = dockerImages
 	actualImages, err := manager.ListImages()
 	if err != nil {
 		t.Fatalf("unexpected error %v", err)
 	}
-	actual := util.NewStringSet()
+	actual := sets.NewString()
 	for _, i := range actualImages {
 		actual.Insert(i.ID)
 	}
@@ -449,7 +450,7 @@ func TestKillContainerInPodWithPreStop(t *testing.T) {
 				},
 				{Name: "bar"}}},
 	}
-	podString, err := testapi.Codec().Encode(pod)
+	podString, err := testapi.Default.Codec().Encode(pod)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -884,7 +885,7 @@ func TestSyncPodCreateNetAndContainer(t *testing.T) {
 	runSyncPod(t, dm, fakeDocker, pod, nil)
 	verifyCalls(t, fakeDocker, []string{
 		// Create pod infra container.
-		"create", "start", "inspect_container",
+		"create", "start", "inspect_container", "inspect_container",
 		// Create container.
 		"create", "start", "inspect_container",
 	})
@@ -933,7 +934,7 @@ func TestSyncPodCreatesNetAndContainerPullsImage(t *testing.T) {
 
 	verifyCalls(t, fakeDocker, []string{
 		// Create pod infra container.
-		"create", "start", "inspect_container",
+		"create", "start", "inspect_container", "inspect_container",
 		// Create container.
 		"create", "start", "inspect_container",
 	})
@@ -1026,7 +1027,7 @@ func TestSyncPodDeletesWithNoPodInfraContainer(t *testing.T) {
 		// Kill the container since pod infra container is not running.
 		"stop",
 		// Create pod infra container.
-		"create", "start", "inspect_container",
+		"create", "start", "inspect_container", "inspect_container",
 		// Create container.
 		"create", "start", "inspect_container",
 	})
@@ -1300,21 +1301,21 @@ func TestSyncPodWithPullPolicy(t *testing.T) {
 	fakeDocker.Lock()
 
 	eventSet := []string{
-		`pulling Pulling image "pod_infra_image"`,
-		`pulled Successfully pulled image "pod_infra_image"`,
-		`pulling Pulling image "pull_always_image"`,
-		`pulled Successfully pulled image "pull_always_image"`,
-		`pulling Pulling image "pull_if_not_present_image"`,
-		`pulled Successfully pulled image "pull_if_not_present_image"`,
-		`pulled Container image "existing_one" already present on machine`,
-		`pulled Container image "want:latest" already present on machine`,
+		`Pulling Pulling image "pod_infra_image"`,
+		`Pulled Successfully pulled image "pod_infra_image"`,
+		`Pulling Pulling image "pull_always_image"`,
+		`Pulled Successfully pulled image "pull_always_image"`,
+		`Pulling Pulling image "pull_if_not_present_image"`,
+		`Pulled Successfully pulled image "pull_if_not_present_image"`,
+		`Pulled Container image "existing_one" already present on machine`,
+		`Pulled Container image "want:latest" already present on machine`,
 	}
 
 	recorder := dm.recorder.(*record.FakeRecorder)
 
 	var actualEvents []string
 	for _, ev := range recorder.Events {
-		if strings.HasPrefix(ev, "pull") {
+		if strings.HasPrefix(ev, "Pull") {
 			actualEvents = append(actualEvents, ev)
 		}
 	}
@@ -2092,7 +2093,7 @@ func TestSyncPodWithTerminationLog(t *testing.T) {
 	runSyncPod(t, dm, fakeDocker, pod, nil)
 	verifyCalls(t, fakeDocker, []string{
 		// Create pod infra container.
-		"create", "start", "inspect_container",
+		"create", "start", "inspect_container", "inspect_container",
 		// Create container.
 		"create", "start", "inspect_container",
 	})
@@ -2131,7 +2132,7 @@ func TestSyncPodWithHostNetwork(t *testing.T) {
 
 	verifyCalls(t, fakeDocker, []string{
 		// Create pod infra container.
-		"create", "start", "inspect_container",
+		"create", "start", "inspect_container", "inspect_container",
 		// Create container.
 		"create", "start", "inspect_container",
 	})
@@ -2332,5 +2333,22 @@ func TestGetUidFromUser(t *testing.T) {
 		if actual != v.expect {
 			t.Errorf("%s failed.  Expected %s but got %s", k, v.expect, actual)
 		}
+	}
+}
+
+func TestGetPidMode(t *testing.T) {
+	// test false
+	pod := &api.Pod{}
+	pidMode := getPidMode(pod)
+
+	if pidMode != "" {
+		t.Errorf("expected empty pid mode for pod but got %v", pidMode)
+	}
+
+	// test true
+	pod.Spec.HostPID = true
+	pidMode = getPidMode(pod)
+	if pidMode != "host" {
+		t.Errorf("expected host pid mode for pod but got %v", pidMode)
 	}
 }

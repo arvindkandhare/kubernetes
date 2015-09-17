@@ -33,7 +33,6 @@ type Interface interface {
 	PodsNamespacer
 	PodTemplatesNamespacer
 	ReplicationControllersNamespacer
-	DaemonsNamespacer
 	ServicesNamespacer
 	EndpointsNamespacer
 	VersionInterface
@@ -47,14 +46,11 @@ type Interface interface {
 	PersistentVolumesInterface
 	PersistentVolumeClaimsNamespacer
 	ComponentStatusesInterface
+	Experimental() ExperimentalInterface
 }
 
 func (c *Client) ReplicationControllers(namespace string) ReplicationControllerInterface {
 	return newReplicationControllers(c, namespace)
-}
-
-func (c *Client) Daemons(namespace string) DaemonInterface {
-	return newDaemons(c, namespace)
 }
 
 func (c *Client) Nodes() NodeInterface {
@@ -127,6 +123,7 @@ type APIStatus interface {
 // Client is the implementation of a Kubernetes client.
 type Client struct {
 	*RESTClient
+	*ExperimentalClient
 }
 
 // ServerVersion retrieves and parses the server's version.
@@ -196,4 +193,8 @@ func IsTimeout(err error) bool {
 		return true
 	}
 	return false
+}
+
+func (c *Client) Experimental() ExperimentalInterface {
+	return c.ExperimentalClient
 }

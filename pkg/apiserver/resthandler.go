@@ -29,6 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/strategicpatch"
 
 	"github.com/emicklei/go-restful"
@@ -308,7 +309,7 @@ func createHandler(r rest.NamedCreater, scope RequestScope, typer runtime.Object
 			return
 		}
 
-		if admit.Handles(admission.Create) {
+		if admit != nil && admit.Handles(admission.Create) {
 			userInfo, _ := api.UserFrom(ctx)
 
 			err = admit.Admit(admission.NewAttributesRecord(obj, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Create, userInfo))
@@ -480,7 +481,7 @@ func UpdateResource(r rest.Updater, scope RequestScope, typer runtime.ObjectType
 			return
 		}
 
-		if admit.Handles(admission.Update) {
+		if admit != nil && admit.Handles(admission.Update) {
 			userInfo, _ := api.UserFrom(ctx)
 
 			err = admit.Admit(admission.NewAttributesRecord(obj, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Update, userInfo))
@@ -545,7 +546,7 @@ func DeleteResource(r rest.GracefulDeleter, checkBody bool, scope RequestScope, 
 			}
 		}
 
-		if admit.Handles(admission.Delete) {
+		if admit != nil && admit.Handles(admission.Delete) {
 			userInfo, _ := api.UserFrom(ctx)
 
 			err = admit.Admit(admission.NewAttributesRecord(nil, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Delete, userInfo))
@@ -618,7 +619,14 @@ func finishRequest(timeout time.Duration, fn resultFunc) (result runtime.Object,
 	// when the select statement reads something other than the one the goroutine sends on.
 	ch := make(chan runtime.Object, 1)
 	errCh := make(chan error, 1)
+	panicCh := make(chan interface{}, 1)
 	go func() {
+		// panics don't cross goroutine boundaries, so we have to handle ourselves
+		defer util.HandleCrash(func(panicReason interface{}) {
+			// Propagate to parent goroutine
+			panicCh <- panicReason
+		})
+
 		if result, err := fn(); err != nil {
 			errCh <- err
 		} else {
@@ -634,6 +642,8 @@ func finishRequest(timeout time.Duration, fn resultFunc) (result runtime.Object,
 		return result, nil
 	case err = <-errCh:
 		return nil, err
+	case p := <-panicCh:
+		panic(p)
 	case <-time.After(timeout):
 		return nil, errors.NewTimeoutError("request did not complete within allowed duration", 0)
 	}

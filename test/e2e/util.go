@@ -35,8 +35,8 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/cache"
 	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
 	"k8s.io/kubernetes/pkg/cloudprovider"
@@ -45,6 +45,7 @@ import (
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/sets"
 	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 
@@ -121,6 +122,7 @@ type TestContextType struct {
 	MinStartupPods        int
 	UpgradeTarget         string
 	PrometheusPushGateway string
+	VerifyServiceAccount  bool
 }
 
 var testContext TestContextType
@@ -259,8 +261,9 @@ func podReady(pod *api.Pod) bool {
 // logPodStates logs basic info of provided pods for debugging.
 func logPodStates(pods []api.Pod) {
 	// Find maximum widths for pod, node, and phase strings for column printing.
-	maxPodW, maxNodeW, maxPhaseW := len("POD"), len("NODE"), len("PHASE")
-	for _, pod := range pods {
+	maxPodW, maxNodeW, maxPhaseW, maxGraceW := len("POD"), len("NODE"), len("PHASE"), len("GRACE")
+	for i := range pods {
+		pod := &pods[i]
 		if len(pod.ObjectMeta.Name) > maxPodW {
 			maxPodW = len(pod.ObjectMeta.Name)
 		}
@@ -275,13 +278,18 @@ func logPodStates(pods []api.Pod) {
 	maxPodW++
 	maxNodeW++
 	maxPhaseW++
+	maxGraceW++
 
 	// Log pod info. * does space padding, - makes them left-aligned.
-	Logf("%-[1]*[2]s %-[3]*[4]s %-[5]*[6]s %[7]s",
-		maxPodW, "POD", maxNodeW, "NODE", maxPhaseW, "PHASE", "CONDITIONS")
+	Logf("%-[1]*[2]s %-[3]*[4]s %-[5]*[6]s %-[7]*[8]s %[9]s",
+		maxPodW, "POD", maxNodeW, "NODE", maxPhaseW, "PHASE", maxGraceW, "GRACE", "CONDITIONS")
 	for _, pod := range pods {
-		Logf("%-[1]*[2]s %-[3]*[4]s %-[5]*[6]s %[7]s",
-			maxPodW, pod.ObjectMeta.Name, maxNodeW, pod.Spec.NodeName, maxPhaseW, pod.Status.Phase, pod.Status.Conditions)
+		grace := ""
+		if pod.DeletionGracePeriodSeconds != nil {
+			grace = fmt.Sprintf("%ds", *pod.DeletionGracePeriodSeconds)
+		}
+		Logf("%-[1]*[2]s %-[3]*[4]s %-[5]*[6]s %[7]s %[8]s",
+			maxPodW, pod.ObjectMeta.Name, maxNodeW, pod.Spec.NodeName, maxPhaseW, pod.Status.Phase, grace, pod.Status.Conditions)
 	}
 	Logf("") // Final empty line helps for readability.
 }
@@ -474,8 +482,10 @@ func createTestingNS(baseName string, c *client.Client) (*api.Namespace, error) 
 		return nil, err
 	}
 
-	if err := waitForDefaultServiceAccountInNamespace(c, got.Name); err != nil {
-		return nil, err
+	if testContext.VerifyServiceAccount {
+		if err := waitForDefaultServiceAccountInNamespace(c, got.Name); err != nil {
+			return nil, err
+		}
 	}
 	return got, nil
 }
@@ -845,7 +855,7 @@ func cleanup(filePath string, ns string, selectors ...string) {
 		if resources != "" {
 			Failf("Resources left running after stop:\n%s", resources)
 		}
-		pods := runKubectl("get", "pods", "-l", selector, nsArg, "-t", "{{ range .items }}{{ if not .metadata.deletionTimestamp }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}{{ end }}")
+		pods := runKubectl("get", "pods", "-l", selector, nsArg, "-o", "go-template={{ range .items }}{{ if not .metadata.deletionTimestamp }}{{ .metadata.name }}{{ \"\\n\" }}{{ end }}{{ end }}")
 		if pods != "" {
 			Failf("Pods left unterminated after stop:\n%s", pods)
 		}
@@ -969,6 +979,11 @@ func (b kubectlBuilder) withStdinData(data string) *kubectlBuilder {
 	return &b
 }
 
+func (b kubectlBuilder) withStdinReader(reader io.Reader) *kubectlBuilder {
+	b.cmd.Stdin = reader
+	return &b
+}
+
 func (b kubectlBuilder) exec() string {
 	var stdout, stderr bytes.Buffer
 	cmd := b.cmd
@@ -1085,7 +1100,7 @@ type podInfo struct {
 type PodDiff map[string]*podInfo
 
 // Print formats and prints the give PodDiff.
-func (p PodDiff) Print(ignorePhases util.StringSet) {
+func (p PodDiff) Print(ignorePhases sets.String) {
 	for name, info := range p {
 		if ignorePhases.Has(info.phase) {
 			continue
@@ -1247,7 +1262,7 @@ func RunRC(config RCConfig) error {
 		unknown := 0
 		inactive := 0
 		failedContainers := 0
-		containerRestartNodes := util.NewStringSet()
+		containerRestartNodes := sets.NewString()
 
 		pods := podStore.List()
 		created := []*api.Pod{}
@@ -1301,7 +1316,7 @@ func RunRC(config RCConfig) error {
 			//	- diagnose by comparing the previous "2 Pod states" lines for inactive pods
 			errorStr := fmt.Sprintf("Number of reported pods changed: %d vs %d", len(pods), len(oldPods))
 			Logf("%v, pods that changed since the last iteration:", errorStr)
-			Diff(oldPods, pods).Print(util.NewStringSet())
+			Diff(oldPods, pods).Print(sets.NewString())
 			return fmt.Errorf(errorStr)
 		}
 
@@ -1331,7 +1346,7 @@ func RunRC(config RCConfig) error {
 }
 
 func dumpPodDebugInfo(c *client.Client, pods []*api.Pod) {
-	badNodes := util.NewStringSet()
+	badNodes := sets.NewString()
 	for _, p := range pods {
 		if p.Status.Phase != api.PodRunning {
 			if p.Spec.NodeName != "" {
@@ -1350,9 +1365,7 @@ func dumpAllPodInfo(c *client.Client) {
 	if err != nil {
 		Logf("unable to fetch pod debug info: %v", err)
 	}
-	for _, pod := range pods.Items {
-		Logf("Pod %s %s node=%s, deletionTimestamp=%s", pod.Namespace, pod.Name, pod.Spec.NodeName, pod.DeletionTimestamp)
-	}
+	logPodStates(pods.Items)
 }
 
 func dumpNodeDebugInfo(c *client.Client, nodeNames []string) {
@@ -1480,19 +1493,19 @@ func DeleteRC(c *client.Client, ns, name string) error {
 		return nil
 	}
 	deleteRCTime := time.Now().Sub(startTime)
-	Logf("Deleting RC took: %v", deleteRCTime)
+	Logf("Deleting RC %s took: %v", name, deleteRCTime)
 	if err == nil {
 		err = waitForRCPodsGone(c, rc)
 	}
 	terminatePodTime := time.Now().Sub(startTime) - deleteRCTime
-	Logf("Terminating RC pods took: %v", terminatePodTime)
+	Logf("Terminating RC %s pods took: %v", name, terminatePodTime)
 	return err
 }
 
 // waitForRCPodsGone waits until there are no pods reported under an RC's selector (because the pods
 // have completed termination).
 func waitForRCPodsGone(c *client.Client, rc *api.ReplicationController) error {
-	return wait.Poll(poll, singleCallTimeout, func() (bool, error) {
+	return wait.Poll(poll, 2*time.Minute, func() (bool, error) {
 		if pods, err := c.Pods(rc.Namespace).List(labels.SelectorFromSet(rc.Spec.Selector), fields.Everything()); err == nil && len(pods.Items) == 0 {
 			return true, nil
 		}
@@ -1842,8 +1855,8 @@ func ReadLatencyMetrics(c *client.Client) ([]LatencyMetric, error) {
 
 // Prints summary metrics for request types with latency above threshold
 // and returns number of such request types.
-func HighLatencyRequests(c *client.Client, threshold time.Duration, ignoredResources util.StringSet) (int, error) {
-	ignoredVerbs := util.NewStringSet("WATCHLIST", "PROXY")
+func HighLatencyRequests(c *client.Client, threshold time.Duration, ignoredResources sets.String) (int, error) {
+	ignoredVerbs := sets.NewString("WATCHLIST", "PROXY")
 
 	metrics, err := ReadLatencyMetrics(c)
 	if err != nil {
@@ -2021,4 +2034,29 @@ func waitForApiserverUp(c *client.Client) error {
 		}
 	}
 	return fmt.Errorf("waiting for apiserver timed out")
+}
+
+// waitForClusterSize waits until the cluster has desired size and there is no not-ready nodes in it.
+func waitForClusterSize(c *client.Client, size int, timeout time.Duration) error {
+	for start := time.Now(); time.Since(start) < timeout; time.Sleep(20 * time.Second) {
+		nodes, err := c.Nodes().List(labels.Everything(), fields.Everything())
+		if err != nil {
+			Logf("Failed to list nodes: %v", err)
+			continue
+		}
+		numNodes := len(nodes.Items)
+
+		// Filter out not-ready nodes.
+		filterNodes(nodes, func(node api.Node) bool {
+			return isNodeReadySetAsExpected(&node, true)
+		})
+		numReady := len(nodes.Items)
+
+		if numNodes == size && numReady == size {
+			Logf("Cluster has reached the desired size %d", size)
+			return nil
+		}
+		Logf("Waiting for cluster size %d, current size %d, not ready nodes %d", size, numNodes, numNodes-numReady)
+	}
+	return fmt.Errorf("timeout waiting %v for cluster size to be %d", timeout, size)
 }

@@ -358,13 +358,58 @@ script
 
 	# Configuration files are located at /etc/saltbase.
 	. /etc/kube-env
-	if [ "${ENABLE_NODE_LOGGING}" = "true" ]; then
-		if [ "${LOGGING_DESTINATION}" = "gcp" ]; then
+	# Fluentd
+	if [ "${ENABLE_NODE_LOGGING:-}" = "true" ]; then
+		if [ "${LOGGING_DESTINATION:-}" = "gcp" ]; then
 			cp /etc/saltbase/kubernetes/saltbase/salt/fluentd-gcp/fluentd-gcp.yaml /etc/kubernetes/manifests/
-		elif [ "${LOGGING_DESTINATION}" = "elasticsearch" ]; then
+		elif [ "${LOGGING_DESTINATION:-}" = "elasticsearch" ]; then
 			cp /etc/saltbase/kubernetes/saltbase/salt/fluentd-es/fluentd-es.yaml /etc/kubernetes/manifests/
 		fi
 	fi
+	# Kube-registry-proxy
+	if [ "${ENABLE_CLUSTER_REGISTRY:-}" = "true" ]; then
+		cp /etc/saltbase/kubernetes/saltbase/salt/kube-registry-proxy/kube-registry-proxy.yaml /etc/kubernetes/manifests/
+	fi
+end script
+
+--===============6024533374511606659==
+MIME-Version: 1.0
+Content-Type: text/upstart-job; charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="kube-node-health-monitoring.conf"
+
+description "Kubenetes node health monitoring"
+
+start on stopped kube-docker and started kube-proxy
+
+respawn
+
+script
+	set -o nounset
+
+	# Wait for a minute to let docker, kubelet, and kube-proxy processes finish initialization.
+	# TODO(andyzheng0831): replace it with a more reliable method if possible.
+	sleep 60
+
+	sleep_seconds=10
+	max_seconds=10
+	# We simply kill the process when there is a failure. Another upstart job will automatically
+	# restart the process.
+	while [ 1 ]; do
+		if ! timeout 10 docker version > /dev/null; then
+			echo "Docker daemon failed!"
+			pkill docker
+		fi
+		if ! curl -m ${max_seconds} -f -s http://127.0.0.1:10255/healthz > /dev/null; then
+			echo "Kubelet is unhealthy!"
+			pkill kubelet
+		fi
+		if ! curl -m ${max_seconds} -f -s http://127.0.0.1:10249/healthz > /dev/null; then
+			echo "Kube-proxy is unhealthy!"
+			pkill kube-proxy
+		fi
+		sleep ${sleep_seconds}
+	done
 end script
 
 --===============6024533374511606659==--

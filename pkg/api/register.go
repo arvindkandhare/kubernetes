@@ -32,8 +32,6 @@ func init() {
 		&PodTemplateList{},
 		&ReplicationControllerList{},
 		&ReplicationController{},
-		&DaemonList{},
-		&Daemon{},
 		&ServiceList{},
 		&Service{},
 		&NodeList{},
@@ -73,9 +71,6 @@ func init() {
 		&ThirdPartyResourceList{},
 		&ThirdPartyResourceData{},
 	)
-	// Legacy names are supported
-	Scheme.AddKnownTypeWithName("", "Minion", &Node{})
-	Scheme.AddKnownTypeWithName("", "MinionList", &NodeList{})
 }
 
 func (*Pod) IsAnAPIObject()                       {}
@@ -85,8 +80,6 @@ func (*PodTemplate) IsAnAPIObject()               {}
 func (*PodTemplateList) IsAnAPIObject()           {}
 func (*ReplicationController) IsAnAPIObject()     {}
 func (*ReplicationControllerList) IsAnAPIObject() {}
-func (*Daemon) IsAnAPIObject()                    {}
-func (*DaemonList) IsAnAPIObject()                {}
 func (*Service) IsAnAPIObject()                   {}
 func (*ServiceList) IsAnAPIObject()               {}
 func (*Endpoints) IsAnAPIObject()                 {}

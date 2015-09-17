@@ -42,7 +42,7 @@ Running Kubernetes locally via Docker
 - [Step Three: Run the service proxy](#step-three-run-the-service-proxy)
 - [Test it out](#test-it-out)
 - [Run an application](#run-an-application)
-- [Expose it as a service:](#expose-it-as-a-service)
+- [Expose it as a service](#expose-it-as-a-service)
 - [A note on turning down your cluster](#a-note-on-turning-down-your-cluster)
 
 ### Overview
@@ -92,14 +92,23 @@ docker run --net=host -d gcr.io/google_containers/etcd:2.0.12 /usr/local/bin/etc
 ### Step Two: Run the master
 
 ```sh
-docker run --net=host --privileged -d -v /sys:/sys:ro -v /var/run/docker.sock:/var/run/docker.sock  gcr.io/google_containers/hyperkube:v1.0.1 /hyperkube kubelet --api-servers=http://localhost:8080 --v=2 --address=0.0.0.0 --enable-server --hostname-override=127.0.0.1 --config=/etc/kubernetes/manifests
+docker run \
+    --volume=/:/rootfs:ro \
+    --volume=/sys:/sys:ro \
+    --volume=/dev:/dev \
+    --volume=/var/lib/docker/:/var/lib/docker:ro \
+    --volume=/var/lib/kubelet/:/var/lib/kubelet:rw \
+    --volume=/var/run:/var/run:rw \
+    --net=host \
+    --privileged=true \
+    -d \
+    gcr.io/google_containers/hyperkube:v1.0.1 \
+    /hyperkube kubelet --containerized --hostname-override="127.0.0.1" --address="0.0.0.0" --api-servers=http://localhost:8080 --config=/etc/kubernetes/manifests
 ```
 
 This actually runs the kubelet, which in turn runs a [pod](../user-guide/pods.md) that contains the other master components.
 
 ### Step Three: Run the service proxy
-
-*Note, this could be combined with master above, but it requires --privileged for iptables manipulation*
 
 ```sh
 docker run -d --net=host --privileged gcr.io/google_containers/hyperkube:v1.0.1 /hyperkube proxy --master=http://127.0.0.1:8080 --v=2
@@ -119,7 +128,7 @@ On OS/X you will need to set up port forwarding via ssh:
 boot2docker ssh -L8080:localhost:8080
 ```
 
-List the nodes in your cluster by running::
+List the nodes in your cluster by running:
 
 ```sh
 kubectl get nodes
@@ -140,7 +149,7 @@ If you are running different Kubernetes clusters, you may need to specify `-s ht
 kubectl -s http://localhost:8080 run nginx --image=nginx --port=80
 ```
 
-now run `docker ps` you should see nginx running.  You may need to wait a few minutes for the image to get pulled.
+Now run `docker ps` you should see nginx running.  You may need to wait a few minutes for the image to get pulled.
 
 ### Expose it as a service
 
@@ -155,7 +164,7 @@ NAME              CLUSTER_IP       EXTERNAL_IP       PORT(S)       SELECTOR     
 nginx             10.0.93.211      <none>            80/TCP        run=nginx              1h
 ```
 
-If `CLUSTER_IP` is blank run the following command to obtain it. Know issue #10836
+If `CLUSTER_IP` is blank run the following command to obtain it. Know issue [#10836](https://github.com/kubernetes/kubernetes/issues/10836)
 
 ```sh
 kubectl get svc nginx

@@ -255,7 +255,7 @@ var _ = Describe("Pods", func() {
 			Fail("Timeout while waiting for pod creation")
 		}
 
-		By("deleting the pod")
+		By("deleting the pod gracefully")
 		if err := podClient.Delete(pod.Name, nil); err != nil {
 			Failf("Failed to delete pod: %v", err)
 		}
@@ -263,11 +263,13 @@ var _ = Describe("Pods", func() {
 		By("verifying pod deletion was observed")
 		deleted := false
 		timeout := false
+		var lastPod *api.Pod
 		timer := time.After(podStartTimeout)
 		for !deleted && !timeout {
 			select {
 			case event, _ := <-w.ResultChan():
 				if event.Type == watch.Deleted {
+					lastPod = event.Object.(*api.Pod)
 					deleted = true
 				}
 			case <-timer:
@@ -277,6 +279,9 @@ var _ = Describe("Pods", func() {
 		if !deleted {
 			Fail("Failed to observe pod deletion")
 		}
+
+		Expect(lastPod.DeletionTimestamp).ToNot(BeNil())
+		Expect(lastPod.Spec.TerminationGracePeriodSeconds).ToNot(BeZero())
 
 		pods, err = podClient.List(labels.SelectorFromSet(labels.Set(map[string]string{"time": value})), fields.Everything())
 		if err != nil {
@@ -533,7 +538,7 @@ var _ = Describe("Pods", func() {
 		}, 1)
 	})
 
-	It("should have monotonically increasing restart count", func() {
+	PIt("should have monotonically increasing restart count", func() {
 		runLivenessTest(framework.Client, framework.Namespace.Name, &api.Pod{
 			ObjectMeta: api.ObjectMeta{
 				Name:   "liveness-http",
@@ -655,7 +660,7 @@ var _ = Describe("Pods", func() {
 				pod.Status.Host, pod.Name, pod.Spec.Containers[0].Name))
 			req := framework.Client.Get().
 				Prefix("proxy").
-				Resource("minions").
+				Resource("nodes").
 				Name(pod.Status.Host).
 				Suffix("exec", framework.Namespace.Name, pod.Name, pod.Spec.Containers[0].Name)
 
@@ -729,7 +734,7 @@ var _ = Describe("Pods", func() {
 
 			req := framework.Client.Get().
 				Prefix("proxy").
-				Resource("minions").
+				Resource("nodes").
 				Name(pod.Status.Host).
 				Suffix("portForward", framework.Namespace.Name, pod.Name)
 

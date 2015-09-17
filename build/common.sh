@@ -219,7 +219,7 @@ function kube::build::ensure_docker_daemon_connectivity {
       echo "Possible causes:"
       echo "  - On Mac OS X, DOCKER_HOST hasn't been set. You may need to: "
       echo "    - Create and start your VM using docker-machine or boot2docker: "
-      echo "      - docker-machine create -f <provider> kube-dev"
+      echo "      - docker-machine create -d <driver> kube-dev"
       echo "      - boot2docker init && boot2docker start"
       echo "    - Set your environment variables using: "
       echo "      - eval \$(docker-machine env kube-dev)"
@@ -835,6 +835,8 @@ function kube::release::package_full_tarball() {
   cp "${KUBE_ROOT}/README.md" "${release_stage}/"
   cp "${KUBE_ROOT}/LICENSE" "${release_stage}/"
   cp "${KUBE_ROOT}/Vagrantfile" "${release_stage}/"
+  mkdir -p "${release_stage}/contrib/completions/bash"
+  cp "${KUBE_ROOT}/contrib/completions/bash/kubectl" "${release_stage}/contrib/completions/bash"
 
   kube::release::clean_cruft
 

@@ -41,6 +41,7 @@ type portal struct {
 }
 
 type serviceInfo struct {
+	isAliveAtomic       int32 // Only access this with atomic ops
 	portal              portal
 	protocol            api.Protocol
 	proxyPort           int
@@ -53,6 +54,18 @@ type serviceInfo struct {
 	stickyMaxAgeMinutes int
 	// Deprecated, but required for back-compat (including e2e)
 	externalIPs []string
+}
+
+func (info *serviceInfo) setAlive(b bool) {
+	var i int32
+	if b {
+		i = 1
+	}
+	atomic.StoreInt32(&info.isAliveAtomic, i)
+}
+
+func (info *serviceInfo) isAlive() bool {
+	return atomic.LoadInt32(&info.isAliveAtomic) != 0
 }
 
 func logTimeout(err error) bool {
@@ -201,12 +214,21 @@ func CleanupLeftovers(ipt iptables.Interface) (encounteredError bool) {
 			encounteredError = true
 		} else {
 			if err = ipt.DeleteChain(iptables.TableNAT, c); err != nil {
-				glog.Errorf("Error flushing userspace chain: %v", err)
+				glog.Errorf("Error deleting userspace chain: %v", err)
 				encounteredError = true
 			}
 		}
 	}
 	return encounteredError
+}
+
+// Sync is called to immediately synchronize the proxier state to iptables
+func (proxier *Proxier) Sync() {
+	if err := iptablesInit(proxier.iptables); err != nil {
+		glog.Errorf("Failed to ensure iptables: %v", err)
+	}
+	proxier.ensurePortals()
+	proxier.cleanupStaleStickySessions()
 }
 
 // SyncLoop runs periodic work.  This is expected to run as a goroutine or as the main loop of the app.  It does not return.
@@ -216,11 +238,7 @@ func (proxier *Proxier) SyncLoop() {
 	for {
 		<-t.C
 		glog.V(6).Infof("Periodic sync")
-		if err := iptablesInit(proxier.iptables); err != nil {
-			glog.Errorf("Failed to ensure iptables: %v", err)
-		}
-		proxier.ensurePortals()
-		proxier.cleanupStaleStickySessions()
+		proxier.Sync()
 	}
 }
 
@@ -256,6 +274,7 @@ func (proxier *Proxier) stopProxy(service proxy.ServicePortName, info *serviceIn
 // This assumes proxier.mu is locked.
 func (proxier *Proxier) stopProxyInternal(service proxy.ServicePortName, info *serviceInfo) error {
 	delete(proxier.serviceMap, service)
+	info.setAlive(false)
 	err := info.socket.Close()
 	port := info.socket.ListenPort()
 	proxier.proxyPorts.Release(port)
@@ -294,6 +313,7 @@ func (proxier *Proxier) addServiceOnPort(service proxy.ServicePortName, protocol
 		return nil, err
 	}
 	si := &serviceInfo{
+		isAliveAtomic:       1,
 		proxyPort:           portNum,
 		protocol:            protocol,
 		socket:              sock,

@@ -25,11 +25,12 @@ import (
 	docker "github.com/fsouza/go-dockerclient"
 	cadvisorApi "github.com/google/cadvisor/info/v1"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/unversioned/record"
+	"k8s.io/kubernetes/pkg/client/record"
 	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/dockertools"
 	"k8s.io/kubernetes/pkg/kubelet/network"
+	"k8s.io/kubernetes/pkg/kubelet/status"
 )
 
 type listContainersResult struct {
@@ -83,7 +84,7 @@ func TestRunOnce(t *testing.T) {
 		recorder:            &record.FakeRecorder{},
 		cadvisor:            cadvisor,
 		nodeLister:          testNodeLister{},
-		statusManager:       newStatusManager(nil),
+		statusManager:       status.NewManager(nil),
 		containerRefManager: kubecontainer.NewRefManager(),
 		readinessManager:    kubecontainer.NewReadinessManager(),
 		podManager:          podManager,
@@ -119,6 +120,13 @@ func TestRunOnce(t *testing.T) {
 			{label: "list pod container", containers: podContainers},
 		},
 		inspectContainersResults: []inspectContainersResult{
+			{
+				label: "syncPod",
+				container: docker.Container{
+					Config: &docker.Config{Image: "someimage"},
+					State:  docker.State{Running: true, Pid: 42},
+				},
+			},
 			{
 				label: "syncPod",
 				container: docker.Container{
