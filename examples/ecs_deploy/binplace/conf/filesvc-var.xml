@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ * Copyright (c) 2013 EMC Corporation
+ * All Rights Reserved
+ *
+ * This software contains the intellectual property of EMC Corporation
+ * or is licensed to EMC Corporation from third parties.  Use of this
+ * software and the intellectual property contained therein is expressly
+ * limited to the terms and conditions of the License Agreement under which
+ * it is provided by or on behalf of EMC.
+ -->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+    <!-- On deployed system, content of this file is generated from filesvc-var-template.xml -->
+    <bean id="serviceinfo" class="com.emc.storageos.coordinator.common.impl.ServiceImpl">
+        <property name="name" value="filesvc"/>
+        <property name="id" value="filesvc-127.0.0.1"/>
+        <!-- this is the configuration for the unsecured port -->
+        <property name="endpoint" value="http://127.0.0.1:2049/"/>
+        <property name="version" value="1"/>
+    </bean>
+
+    <bean id="controlVip" class="java.lang.String">
+        <constructor-arg value="127.0.0.1"/>
+    </bean>
+    <bean id="apiServiceIps" class="java.util.ArrayList">
+        <constructor-arg>
+            <list value-type="java.lang.String">
+                <value>127.0.0.1</value>
+            </list>
+        </constructor-arg>
+    </bean>
+
+</beans>

@@ -123,4 +123,4 @@ chmod a+x setup.sh
 gcloud compute copy-files setup.sh $hostname:/tmp/ --zone $zonename
 gcloud compute ssh $hostname "sudo cp -f /tmp/setup.sh /host/files/" --zone $zonename
  
-#gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename
+gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename

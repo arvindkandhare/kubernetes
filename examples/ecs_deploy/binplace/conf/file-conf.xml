@@ -1,0 +1,609 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ * Copyright (c) 2013 EMC Corporation
+ * All Rights Reserved
+ *
+ * This software contains the intellectual property of EMC Corporation
+ * or is licensed to EMC Corporation from third parties.  Use of this
+ * software and the intellectual property contained therein is expressly
+ * limited to the terms and conditions of the License Agreement under which
+ * it is provided by or on behalf of EMC.
+ -->
+<beans xmlns="http://www.springframework.org/schema/beans"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:context="http://www.springframework.org/schema/context"
+    xmlns:util="http://www.springframework.org/schema/util"
+    xmlns:stat="http://www.emc.com/schema/stat"     
+    xsi:schemaLocation="http://www.springframework.org/schema/beans
+    http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+    http://www.springframework.org/schema/util
+    http://www.springframework.org/schema/util/spring-util-3.0.xsd
+    http://www.springframework.org/schema/context
+    http://www.springframework.org/schema/context/spring-context-3.1.xsd
+    http://www.emc.com/schema/stat
+    http://www.emc.com/schema/stat/stat.xsd">
+
+    <context:annotation-config />
+    <bean id="servicePrefix" class="java.lang.String">
+        <constructor-arg value="filesvc"/>
+    </bean>
+    <import resource="classpath:filesvc-var.xml"/>
+    <import resource="classpath:dbclient-conf.xml"/>
+    <import resource="classpath:common-conf.xml"/>
+    <import resource="classpath:shared-ports-conf.xml"/>
+    <import resource="classpath:shared-threadpool-conf.xml"/>
+    <import resource="stat-client-conf.xml"/>
+    <import resource="classpath:legacy-coordinatorclient.xml"/>
+    <import resource="classpath:vnestclient-conf.xml"/>
+
+    <import resource="classpath:blobclient-conf.xml"/>
+
+    <!-- common configuration -->
+    <util:properties id="objectProperties" location="classpath:shared.object.properties" />
+    <util:properties id="storageProcessPortsConfig" location="classpath:storageprocessports.object.properties" />
+    <util:properties id="serviceProperties" location="classpath:filesvc.blobclient.object.properties" local-override="true"/>
+
+    <import resource="classpath:jmx-conf.xml"/>
+
+    <!-- BlobApi -->
+    <bean id="zkStore" parent="blobClientZKStore">
+        <constructor-arg ref="taskScheduler"/>
+    </bean>
+    <bean id="taskScheduler" parent="blobClientTaskScheduler">
+        <constructor-arg name="name" value="filesvc"/>
+    </bean>
+
+
+
+
+    <bean id="blobSvcNodeProvider" class="com.emc.storageos.ipc.ClientLib.StaticRemoteNodeProvider">
+        <constructor-arg>
+            <value>localhost</value>
+        </constructor-arg>
+    </bean>
+    <bean id="dataServiceAPI" class="com.emc.storageos.ipc.ClientLib.ClientLib" factory-method="connect">
+        <constructor-arg ref="blobSvcNodeProvider"/>
+        <constructor-arg value="#{storageProcessPortsConfig['port.tcpIpcServer']}"/>
+    </bean>
+    <bean id="meteringDataCollector" class="com.emc.storageos.data.object.impl.MeteringDataCollector">
+        <constructor-arg>
+            <util:constant static-field="com.emc.storageos.objcontrol.object.shared.HeadType.S3"/>
+        </constructor-arg>
+    </bean>
+    <bean id="aggregateMeteringTableClient" class="com.emc.storageos.data.object.impl.AggregateMeteringTableClient" />
+    <!-- ec buffer pools for TYPE-I -->
+    <bean id="chunkTypeIMemoryPool" class="com.emc.storageos.data.object.client.utils.ChunkTypeIMemoryPool">
+        <property name="dataPool" ref="typeIDataMemoryPool"/>
+        <property name="codePool" ref="typeICodeMemoryPool"/>
+    </bean>
+    <!-- TYPE-I chunk data segments buffer pool -->
+    <bean id="typeIDataMemoryPool" class="com.emc.storageos.data.object.client.utils.EcMemoryBufferPool">
+        <constructor-arg value="#{objectProperties['object.EnableEcOptimization'] ? serviceProperties['object.ChunkTypeIEcDataBufferCapacity'] : 0}"/>
+        <constructor-arg value="false"/>
+        <constructor-arg ref="clientProperties"/>
+        <constructor-arg value="false"/>
+    </bean>
+    <!-- TYPE-I chunk code segments buffer pool -->
+    <bean id="typeICodeMemoryPool" class="com.emc.storageos.data.object.client.utils.EcMemoryBufferPool">
+        <constructor-arg value="#{objectProperties['object.EnableEcOptimization'] ? serviceProperties['object.ChunkTypeIEcCodeBufferCapacity'] : 0}"/>
+        <constructor-arg value="false"/>
+        <constructor-arg ref="clientProperties"/>
+        <constructor-arg value="true"/>
+    </bean>
+    <!-- ec buffer pools for TYPE-II -->
+    <bean id="chunkTypeIIMemoryPool" class="com.emc.storageos.data.object.client.utils.ChunkTypeIIMemoryPool">
+        <constructor-arg value="2"/> <!-- batch fetch size-->
+        <property name="dataPool" ref="chunkTypeIIDataMemoryPool"/>
+        <property name="codePool" ref="chunkTypeIICodeMemoryPool"/>
+    </bean>
+    <!-- TYPE-II chunk data segments buffer pools -->
+    <bean id="chunkTypeIIDataMemoryPool" class="com.emc.storageos.data.object.client.utils.EcMemoryBufferPool">
+        <constructor-arg value="#{objectProperties['object.EnableEcOptimization'] ? serviceProperties['object.ChunkTypeIIEcDataBufferCapacity'] : 0}"/>
+        <constructor-arg value="false"/>
+        <constructor-arg ref="clientProperties"/>
+        <constructor-arg value="false"/>
+    </bean>
+    <!-- TYPE-II chunk code segments buffer pools -->
+    <bean id="chunkTypeIICodeMemoryPool" class="com.emc.storageos.data.object.client.utils.EcMemoryBufferPool">
+        <constructor-arg value="#{objectProperties['object.EnableEcOptimization'] ? serviceProperties['object.ChunkTypeIIEcCodeBufferCapacity'] : 0}"/>
+        <constructor-arg value="false"/>
+        <constructor-arg ref="clientProperties"/>
+        <constructor-arg value="true"/>
+    </bean>
+    <bean id="processMonitor" class="com.emc.storageos.data.object.utils.ProcessMonitor" scope="singleton">
+        <property name="coordinatorClient" ref="coordinator"/>
+    </bean>
+
+
+
+    <bean id="ioUtil" parent="blobClientIOUtil">
+        <property name="collectIoStats" value="true"/>
+        <property name="statisticClient" ref="statClient"/>
+    </bean>
+
+    <!-- RtClient Content -->
+    <import resource="classpath:legacy-coordinatorclient.xml"/>
+
+
+    <bean id="alertClient" class="com.emc.storageos.data.object.directoryclient.AlertClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+        <constructor-arg ref="directoryOwnershipRecordMap"/>
+    </bean>
+
+
+    <bean id="alertsHandler" class="com.emc.storageos.data.object.directoryclient.AlertsHandler">
+        <property name="eventId" value="599"/>
+        <property name="coordinatorClient" ref="coordinator"/>
+        <property name="logName" value="dtquery" />
+        <property name="alertClient" ref="alertClient"/>
+    </bean>
+    <bean id="beacon" class="com.emc.storageos.coordinator.client.beacon.impl.ServiceBeaconImpl" init-method="start" destroy-method="stop" depends-on="filesvc">
+        <property name="zkConnection" ref="zkconn"/>
+        <property name="service" ref="serviceinfo"/>
+    </bean>
+    <bean id="bootstrapFactory" class="com.emc.storageos.data.object.sscommunicator.BootstrapFactory"/>
+    <bean id="bucketClient" class="com.emc.storageos.data.object.directoryclient.BucketClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+        <constructor-arg ref="directoryOwnershipRecordMap"/>
+    </bean>
+    <bean id="bufferManager" class="com.emc.storageos.data.object.impl.buffer.BufferManagerImpl"/>
+    <bean id="chunkClient" class="com.emc.storageos.data.object.client.ChunkClientImpl"/>
+    <bean id="clientProperties" class="com.emc.storageos.data.object.client.utils.ClientProperties"/>
+    <bean id="cmClient" class="com.emc.storageos.data.object.directoryclient.CmClient"/>
+
+    <bean id="communicator" class="com.emc.storageos.data.object.communicator.impl.CommunicationManager">
+        <constructor-arg name="serverPort" value="#{storageProcessPortsConfig['port.file']}"/>
+    </bean>
+    <bean id="communicatorProperties" class="com.emc.storageos.data.object.communicator.impl.CommunicatorProperties"/>
+<!--    <bean id="dataServiceAPI" class="com.emc.storageos.ipc.ClientLib.ClientLib" factory-method="connect">
+        <constructor-arg ref="blobSvcNodeProvider"/>
+        <constructor-arg value="#{storageProcessPortsConfig['port.tcpIpcServer']}"/>
+    </bean>-->
+    <bean id="deviceControllerHelper" class="com.emc.storageos.data.object.controller.util.DeviceControllerHelper">
+        <property name="deviceControllers">
+            <map>
+                <entry key="FileSystems" value="fileSystemDeviceController"/>
+                <entry key="NfsExportPoints" value="nfsExportDeviceController"/>
+                <entry key="Local" value="localDeviceController"/>
+                <entry key="Atmos" value="atmosPassThroughKeyController"/>
+                <entry key="Commodity" value="ssDeviceController"/>
+            </map>
+        </property>
+    </bean>
+    <bean id="directoryClient" class="com.emc.storageos.data.object.directoryService.impl.DirectoryClient"/>
+    <bean id="directoryKeyHandler" class="com.emc.storageos.data.object.ownership.impl.DirectoryKeyHandler"/>
+    <bean id="directoryOperations" class="com.emc.storageos.file.service.impl.ResourceDirectoryOperations"/>
+    <bean id="directoryOwner" class="com.emc.storageos.data.object.ownership.impl.DirectoryOwner"/>
+    <bean id="directoryOwnershipConfigHelper" class="com.emc.storageos.data.object.ownership.impl.DirectoryOwnershipConfigHelper"/>
+    <bean id="directoryOwnershipRecordMap" class="com.emc.storageos.data.object.ownership.impl.DirectoryOwnershipRecordMap"/>
+    <!--<bean id="dtProperties" class="com.emc.storageos.data.object.impl.DTProperties" />-->
+    <bean id="fileSystemDeviceController" class="com.emc.storageos.data.object.controller.impl.FileSystemDeviceController" scope="prototype"/>
+    <bean id="internalAlertsClient" class="com.emc.storageos.systemservices.impl.client.InternalAlertsClient">
+        <constructor-arg value="localhost"/>
+        <constructor-arg value="9998"/> <!-- syssvc secure port -->
+        <constructor-arg ref="keyGenerator" />
+        <constructor-arg value="120000" />
+        <constructor-arg ref="coordinator"/>
+    </bean>
+    <!--<bean id="ioUtil" class="com.emc.storageos.data.object.client.utils.IOUtil"/>-->
+    <bean id="keyGenerator" class="com.emc.storageos.security.authentication.InternalApiSignatureKeyGenerator">
+        <property name="coordinator" ref="coordinator"/>
+    </bean>
+    <bean id="keyPoolInfoAccess" class="com.emc.storageos.data.api.service.impl.resource.utils.KeyPoolInfoAccess"/>
+    <bean id="keyPoolUtils" class="com.emc.storageos.data.object.utils.KeyPoolUtils"/>
+    <bean id="keypoolhelper" class="com.emc.storageos.objcontrol.object.shared.keypool.KeyPoolHelper"/>
+    <bean id="lockutils" class="com.emc.storageos.objcontrol.object.shared.LockUtils"/>
+    <bean id="migratorProps" class="com.emc.storageos.data.object.zkstore.impl.MigratorProperties"/>
+    <bean id="nfsExportDeviceController" class="com.emc.storageos.data.object.controller.impl.NfsExportDeviceController" scope="prototype"/>
+    <bean id="nfsHelper" class="com.emc.storageos.data.object.controller.impl.file.utils.NfsHelper"/>
+    <bean id="objectCache" class="com.emc.storageos.data.object.controller.util.ObjectCache"/>
+    <bean id="objectVarrayClient" class="com.emc.storageos.data.object.ipc.objectvarray.client.UpgradeAwareObjectVarrayClient">
+        <property name="objVarrayClient">
+            <bean class="com.emc.storageos.data.object.ipc.objectvarray.client.ZKObjectVarrayClient">
+                <constructor-arg ref="zkStore"/>
+                <constructor-arg ref="lockutils"/>
+            </bean>
+        </property>
+        <property name="dbClient" ref="dbclient"/>
+    </bean>
+    <bean id="ownershipInfoClient" class="com.emc.storageos.data.object.directoryclient.OwnershipInfoClient"/>
+    <bean id="ownershipZkClient" class="com.emc.storageos.data.object.directoryclient.OwnershipZkClient"/>
+    <bean id="paxosClient" class="com.emc.storageos.data.object.directoryclient.PaxosClientImpl">
+        <constructor-arg ref="paxosClientProperties"/>
+    </bean>
+    <bean id="paxosClientProperties" class="com.emc.storageos.data.object.directoryService.PaxosClientProperties"/>
+    <bean id="repGroupClient" class="com.emc.storageos.data.object.directoryclient.RepGroupClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+    </bean>
+    <bean id="repGroupObserver" class="com.emc.storageos.data.object.devicescanner.RepGroupObserver"/>
+    <bean id="requestProcessor" class="com.emc.storageos.data.object.communicator.impl.ClientRequestProcessor"/>
+    <bean id="rmClient" class="com.emc.storageos.data.object.directoryclient.RmClient"/>
+    <bean id="routingClient" class="com.emc.storageos.data.object.directoryclient.RoutingClientBase"/>
+    <bean id="routingClientProperties" class="com.emc.storageos.data.object.directoryclient.RoutingClientProperties"/>
+    <bean id="scannerProperties" class="com.emc.storageos.data.object.impl.ScannerProperties"/>
+    <bean id="ssAddressResolver" class="com.emc.storageos.data.object.utils.SSAddressResolverImpl">
+        <constructor-arg ref="viprNestConfigClient"/>
+        <constructor-arg ref="apiServiceIps" />
+    </bean>
+    <bean id="ssConnMgr" class="com.emc.storageos.data.object.sscommunicator.SSConnMgr" init-method="init"/>
+    <bean id="ssDeviceController" class="com.emc.storageos.data.object.controller.impl.SSDeviceController" scope="prototype">
+        <property name="origin" value="filesvc"/>
+    </bean>
+    <bean id="ssmClient" class="com.emc.storageos.data.ssmclient.SSManagerClient"/>
+    <bean id="sysVAModule" class="com.emc.storageos.data.system.SystemVirtualArrayModule" factory-method="getInstance">
+        <constructor-arg ref="objectVarrayClient"/>
+        <constructor-arg ref="viprNestConfigClient"/>
+        <constructor-arg ref="lockutils"/>
+    </bean>
+    <!--<bean id="taskScheduler" class="com.emc.storageos.data.object.impl.TaskScheduler">
+        <constructor-arg name="name" value="DtQuery"/>
+        <property name="threadPoolConfigs">
+            <list>
+                <ref bean="communicatorThreadPoolConfig"/>
+                <ref bean="directoryOperationTaskThreadPoolConfig"/>
+                <ref bean="ownershipThreadPoolConfig"/>
+                <ref bean="DTInitStatusThreadPoolConfig"/>
+            </list>
+        </property>
+    </bean>-->
+    <bean id="tempFailedZoneClient" class="com.emc.storageos.data.object.directoryclient.TempFailedZoneClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+    </bean>
+    <bean id="tempFailureDetectorHelper" class="com.emc.storageos.data.object.utils.TempFailureDetectorHelper"/>
+    <!-- <bean id="zkStore" class="com.emc.storageos.data.object.zkstore.impl.ZkKVStoreImpl">
+        <constructor-arg ref="scannerProperties"/>
+        <constructor-arg ref="taskScheduler"/>
+        <property name="migratorProperties" ref="migratorProps"/>
+    </bean>-->
+    <bean id="zoneInfoClient" class="com.emc.storageos.data.object.directoryclient.ZoneInfoClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+        <constructor-arg ref="directoryOwnershipRecordMap"/>
+        <property name="repGroupClient" ref="repGroupClient"/>
+    </bean>
+    <bean id="zoneScanner" class="com.emc.storageos.data.object.utils.ZoneScanner" init-method="start"/>
+    <bean id="zoneUUIDManager" class="com.emc.storageos.data.object.utils.ZoneUUIDManager" init-method="start">
+        <property name="canCreateUUID" value="false"/>
+    </bean>
+
+    <!-- File Beans -->
+
+    <bean id="fileKeyValueClient" class="com.emc.storageos.data.object.directoryclient.FileKeyValueClient">
+        <constructor-arg ref="routingClient"/>
+        <constructor-arg ref="sysVAModule"/>
+        <constructor-arg ref="directoryOwnershipRecordMap"/>
+    </bean>
+
+    <util:properties id="fileProperties" location="classpath:file.properties" />
+    <bean id="fileServiceProperties" class="com.emc.storageos.file.service.FileServiceProperties"/>
+    <bean id="fileService" class="com.emc.storageos.file.service.impl.FileServiceImpl">
+        <property name="fileServiceProperties" ref="fileServiceProperties"/>
+    </bean>
+    <bean id="keyValueStore" class="com.emc.storageos.kv.EngineKeyValueStore"/>
+   
+    <bean id="statClient" class="com.emc.storageos.data.statclient.StatisticClientImpl" scope="singleton">
+        <constructor-arg name="rootGroupTemplate" ref="filesvc"/>
+    </bean>
+
+    <stat:group id="filesvc" description="File service statistics">
+        <stat:group id="nfs3_handlers">
+        	<stat:group id="nfs3_access">
+	        	<stat:counter id="total_request_counter" description="Total number of access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for access requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_commit">
+	        	<stat:counter id="total_request_counter" description="Total number of commit requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed commit requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for commit requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_create">
+	        	<stat:counter id="total_request_counter" description="Total number of create requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed create requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for create requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_fsinfo">
+	        	<stat:counter id="total_request_counter" description="Total number of fsinfo requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of fsinfo access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for fsinfo requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_fsstat">
+	        	<stat:counter id="total_request_counter" description="Total number of fsstat requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed fsstat requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for fsstat requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_getattr">
+	        	<stat:counter id="total_request_counter" description="Total number of getattr requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed getattr requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for getattr requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_lookup">
+	        	<stat:counter id="total_request_counter" description="Total number of lookup requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed lookup requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for lookup requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_mkdir">
+	        	<stat:counter id="total_request_counter" description="Total number of mkdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed mkdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for mkdir requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_access">
+	        	<stat:counter id="total_request_counter" description="Total number of access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for access requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_mknod">
+	        	<stat:counter id="total_request_counter" description="Total number of mknod requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed mknod requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for mknod requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_pathconf">
+	        	<stat:counter id="total_request_counter" description="Total number of pathconf requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed pathconf requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for pathconf requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_read">
+	        	<stat:counter id="total_request_counter" description="Total number of read requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed read requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for read requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_readdir">
+	        	<stat:counter id="total_request_counter" description="Total number of readdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed readdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for readdir requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_readdirplus">
+	        	<stat:counter id="total_request_counter" description="Total number of readdirplus requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of readdirplus access requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for readdirplus requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_readlink">
+	        	<stat:counter id="total_request_counter" description="Total number of readlink requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed readlink requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for readlink requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_remove">
+	        	<stat:counter id="total_request_counter" description="Total number of remove requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed remove requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for remove requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_rename">
+	        	<stat:counter id="total_request_counter" description="Total number of rename requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed rename requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for rename requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_rmdir">
+	        	<stat:counter id="total_request_counter" description="Total number of rmdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed rmdir requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for rmdir requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_setattr">
+	        	<stat:counter id="total_request_counter" description="Total number of setattr requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed setattr requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for setattr requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_symlink">
+	        	<stat:counter id="total_request_counter" description="Total number of symlink requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed symlink requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for symlink requests"/>        		
+        	</stat:group>
+        	<stat:group id="nfs3_write">
+	        	<stat:counter id="total_request_counter" description="Total number of write requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:counter id="failed_request_counter" description="Number of failed write requests" value="0" aggregationTypes="TOTAL"/>
+	        	<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for write requests"/>        		
+        	</stat:group>
+        </stat:group>
+        <stat:group id="client_api">
+        	<stat:group id="bucket">
+ 				<stat:group id="create">
+	        		<stat:counter id="total_request_counter" description="Total number of CreateBucket requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for CreateBucket requests"/>        		
+        		</stat:group>
+ 				<stat:group id="get">
+	        		<stat:counter id="total_request_counter" description="Total number of GetBucket requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetBucket requests"/>        		
+        		</stat:group> 
+        		<stat:group id="delete">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteBucket requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteBucket requests"/>        		
+        		</stat:group> 
+        		<stat:group id="list">
+	        		<stat:counter id="total_request_counter" description="Total number of ListBuckets requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for ListBuckets requests"/>        		
+        		</stat:group>       		
+        	</stat:group>
+        	<stat:group id="blob">
+ 				<stat:group id="create">
+	        		<stat:counter id="total_request_counter" description="Total number of createBlob requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for createBlob requests"/>        		
+        		</stat:group>
+ 				<stat:group id="write">
+	        		<stat:counter id="total_request_counter" description="Total number of writeBlob requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for writeBlob requests"/>        		
+        		</stat:group> 
+        		<stat:group id="write_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of  writeBlobByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for writeBlobByHandle requests"/>        		
+        		</stat:group> 
+        		<stat:group id="truncate">
+	        		<stat:counter id="total_request_counter" description="Total number of truncateBlob requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for truncateBlob requests"/>        		
+        		</stat:group>
+ 				<stat:group id="read">
+	        		<stat:counter id="total_request_counter" description="Total number of readBlob requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for readBlob requests"/>        		
+        		</stat:group>
+ 				<stat:group id="read_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of readBlobByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for readBlobByHandle requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_blobhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of GetBlobHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for access requests"/>        		
+        		</stat:group>
+        		<stat:group id="get_pathhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of GetPathByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetPathByHandle requests"/>        		
+        		</stat:group>       
+        		<stat:group id="delete">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteBlob requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteBlob requests"/>        		
+        		</stat:group>            		       		
+        		<stat:group id="get_bloblocation">
+	        		<stat:counter id="total_request_counter" description="Total number of GetBlobLocation requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetBlobLocation requests"/>        		
+        		</stat:group>
+        		 <stat:group id="create_symlink">
+	        		<stat:counter id="total_request_counter" description="Total number of CreateSymlink requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for CreateSymlink requests"/>        		
+        		</stat:group> 
+        		<stat:group id="delete_symlink">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteSymlink requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteSymlink requests"/>        		
+        		</stat:group>         		       				       		
+        	</stat:group>
+        	<stat:group id="dir">
+ 				<stat:group id="rename">
+	        		<stat:counter id="total_request_counter" description="Total number of Rename requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for Rename requests"/>        		
+        		</stat:group>
+ 				<stat:group id="create">
+	        		<stat:counter id="total_request_counter" description="Total number of CreateDirectory requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for CreateDirectory requests"/>        		
+        		</stat:group> 
+        		<stat:group id="delete">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteDirectory requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteDirectory requests"/>        		
+        		</stat:group> 
+        		<stat:group id="list">
+	        		<stat:counter id="total_request_counter" description="Total number of ListDirectory requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for ListDirectory requests"/>        		
+        		</stat:group>
+ 				<stat:group id="list_plus">
+	        		<stat:counter id="total_request_counter" description="Total number of ListDirectoryPlus requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for ListDirectoryPlus requests"/>        		
+        		</stat:group>
+        	</stat:group>
+        	<stat:group id="metadata">
+ 				<stat:group id="get_user">
+	        		<stat:counter id="total_request_counter" description="Total number of GetUserMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetUserMetadata requests"/>        		
+        		</stat:group>
+ 				<stat:group id="get_buckethead">
+	        		<stat:counter id="total_request_counter" description="Total number of GetBucketHeadMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetBucketHeadMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="set_buckethead">
+	        		<stat:counter id="total_request_counter" description="Total number of SetBucketHeadMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for access requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_namespacehead">
+	        		<stat:counter id="total_request_counter" description="Total number of GetNamespaceHeadMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetNamespaceHeadMetadata requests"/>        		
+        		</stat:group>
+ 				<stat:group id="set_namespacehead">
+	        		<stat:counter id="total_request_counter" description="Total number of SetNamespaceHeadMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetNamespaceHeadMetadata requests"/>        		
+        		</stat:group>
+ 				<stat:group id="get_alluser">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAllUserMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAllUserMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="set_user">
+	        		<stat:counter id="total_request_counter" description="Total number of get SetUserMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetUserMetadata requests"/>        		
+        		</stat:group>
+        		<stat:group id="get_system">
+	        		<stat:counter id="total_request_counter" description="Total number of GetSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetSystemMetadata requests"/>        		
+        		</stat:group>
+ 				<stat:group id="get_allsystem">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAllSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAllSystemMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_allsystem_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAllSystemMetadataByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAllSystemMetadataByHandle requests"/>        		
+        		</stat:group>   
+        		<stat:group id="set_system">
+	        		<stat:counter id="total_request_counter" description="Total number of SetSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetSystemMetadata requests"/>        		
+        		</stat:group>
+ 				<stat:group id="delete_user">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteUserMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteUserMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_stat">
+	        		<stat:counter id="total_request_counter" description="Total number of GetStatMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetStatMetadata requests"/>        		
+        		</stat:group>   
+        		 <stat:group id="get_linkstat">
+	        		<stat:counter id="total_request_counter" description="Total number of GetLinkStat requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetLinkStat requests"/>        		
+        		</stat:group>
+ 				<stat:group id="get_linkstat_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of GetLinkStatByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetLinkStatByHandle requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_acl">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAcl requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAcl requests"/>        		
+        		</stat:group>
+        		<stat:group id="set_acl">
+	        		<stat:counter id="total_request_counter" description="Total number of SetAcl requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetAcl requests"/>        		
+        		</stat:group>
+        		<stat:group id="set_acl_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of SetAclByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetAclByHandle requests"/>        		
+        		</stat:group>  
+        		<stat:group id="get_acl_byhandle">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAclByHandle requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAclByHandle requests"/>        		
+        		</stat:group>
+    		    <stat:group id="get_headsystem">
+	        		<stat:counter id="total_request_counter" description="Total number of GetHeadSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetHeadSystemMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_allheadsystem">
+	        		<stat:counter id="total_request_counter" description="Total number of GetAllHeadSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetAllHeadSystemMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="set_headsystem">
+	        		<stat:counter id="total_request_counter" description="Total number of SetHeadSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for SetHeadSystemMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="delete_headsystem">
+	        		<stat:counter id="total_request_counter" description="Total number of DeleteHeadSystemMetadata requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for DeleteHeadSystemMetadata requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_engineinfo">
+	        		<stat:counter id="total_request_counter" description="Total number of GetEngineInfo requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetEngineInfo requests"/>        		
+        		</stat:group> 
+        		<stat:group id="get_groups">
+	        		<stat:counter id="total_request_counter" description="Total number of GetGroups requests" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:advanced_duration id="latency" timeUnit="MILLISECONDS" operationsMaxCount="100000" aggregationTypes="COMPLEX" description="Latency for GetGroups requests"/>        		
+        		</stat:group>
+        	</stat:group>
+       	</stat:group>
+       	<stat:group id="cache">
+       		<stat:group id="lookup_cache">
+	        		<stat:counter id="total_request_counter" description="Total number of requests to lookup cache" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:counter id="misses" description="Number of misses for lookup cache requests" value="0" aggregationTypes="TOTAL"/>
+        	</stat:group>
+        	<stat:group id="objattr_cache">
+	        		<stat:counter id="total_request_counter" description="Total number of requests to object attribute cache" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:counter id="misses" description="Number of misses for object attribute cache" value="0" aggregationTypes="TOTAL"/>
+        	</stat:group>
+        	<stat:group id="dirlist_cache">
+	        		<stat:counter id="total_request_counter" description="Total number of requests to directory list cache" value="0" aggregationTypes="TOTAL"/>
+	        		<stat:counter id="misses" description="Number of misses for directory list cache" value="0" aggregationTypes="TOTAL"/>
+        	</stat:group>
+        </stat:group>
+    </stat:group>
+</beans>
