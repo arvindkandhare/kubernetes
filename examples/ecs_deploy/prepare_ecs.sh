@@ -76,6 +76,10 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
 
  cat network.json
  gcloud compute copy-files ./network.json $hostname:/tmp/ --zone $zonename
+ gcloud compute copy-files ./examples/ecs_deploy/binplace $hostname:/tmp/ --zone $zonename
+ gcloud compute ssh $hostname "sudo cp -rf /tmp/binplace /host/files" --zone $zonename
+ gcloud compute ssh $hostname "sudo nsenter -t $PROCID -m -u -i -n -p /host/files/binplace/cpbinplace.sh" --zone $zonename
+ 
  gcloud compute ssh $hostname "sudo cp -f /tmp/network.json /host/data/network.json" --zone $zonename
 
  IPLIST=$IPLIST,$IP
@@ -119,4 +123,4 @@ chmod a+x setup.sh
 gcloud compute copy-files setup.sh $hostname:/tmp/ --zone $zonename
 gcloud compute ssh $hostname "sudo cp -f /tmp/setup.sh /host/files/" --zone $zonename
  
-gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename
+#gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename

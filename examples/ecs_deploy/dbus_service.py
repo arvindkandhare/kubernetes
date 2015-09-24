@@ -11,11 +11,9 @@ class SomeObject(dbus.service.Object):
         print (str(hello_message))
         return [["1","1", 100 ,"Good","1","1","1"]]
     @dbus.service.method("com.emc.vipr.fabric.Value",
-                         in_signature='s', out_signature='as')
-    @dbus.service.method("com.emc.vipr.fabric.Value",
-                         in_signature='s', out_signature='as')
-    def getNodeMode(self,message):
-        return "OPER_MODE"
+                         in_signature='', out_signature='(ss)')
+    def getNodeMode(self):
+        return ["OPER_MODE","asdd"]
     def HelloWorld(self, hello_message):
         print (str(hello_message))
         return ["Hello", " from example-service.py", "with unique name",
@@ -33,4 +31,3 @@ if __name__ == '__main__':
     print "Running example service."
 #    print usage
     mainloop.run()
-
