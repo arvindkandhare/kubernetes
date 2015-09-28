@@ -59,7 +59,7 @@ function stop()
 }
 
 
-start /share
+#start /share
 
 
 /usr/local/bin/wrapdocker

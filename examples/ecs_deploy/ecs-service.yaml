@@ -31,6 +31,12 @@ spec:
   - port: 9021
     name: eighth
 
+  - port: 8020
+    name: filsvcdbg
+
+  - port: 9899
+    name: fileprovision
+
   type: LoadBalancer
   selector:
     name: ecs

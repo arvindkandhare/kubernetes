@@ -33,6 +33,23 @@ spec:
           ports:
           - containerPort: 4443
 
+#        - name: ecs-file
+#          image: arvindkandhare/ecs-file
+#          volumeMounts:
+#            - mountPath: "/host"
+#              name: host
+#            - mountPath: "/data"
+#              name: data
+#            - mountPath: "/opt/storageos/logs"
+#              name: log1
+#            - mountPath: "/vagrant"
+#              name: vagrant
+#            - mountPath: "/dae"
+#              name: dae
+#            - mountPath: "/var/run/dbus"
+#              name: dbus
+
+
       volumes:
           - name: host 
             hostPath:
@@ -42,6 +59,10 @@ spec:
             hostPath:
                path: "/var/log/vipr/emcvipr-object"
   
+          - name: log1
+            hostPath:
+               path: "/var/log/vipr/emcvipr-object1"
+
           - name: data 
             hostPath:
                 path: "/data"

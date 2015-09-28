@@ -36,7 +36,6 @@ RUN git clone https://github.com/arvindkandhare/s3fs-fuse
 RUN cd s3fs-fuse && ./autogen.sh && ./configure --prefix=/usr && make && make install
 
 
-RUN apt-get install -y nfs-kernel-server nfs-common
 
 
 ADD runme /usr/local/bin/

@@ -106,8 +106,10 @@ chown -R 444:444 /host
 
 echo "Creating /var/log/vipr/emcvipr-object folder"
 mkdir -p /var/log/vipr/emcvipr-object
+mkdir -p /var/log/vipr/emcvipr-object1
 echo "Changing /var/log/vipr/emcvipr-object Permissions"
 chown 444:444 /var/log/vipr/emcvipr-object
+chown 444:444 /var/log/vipr/emcvipr-object1
 echo "Creating /data folder"
 mkdir /data
 echo "Changing /data Permissions"

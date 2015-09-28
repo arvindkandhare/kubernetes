@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mosaicmeweb-service
+  labels:
+    name: mosaicmeweb-service
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 80
+    name: first
+    
+  - port: 5672
+    name: second
+ 
+  - port: 6379
+    name: third
+  
+
+
+  type: LoadBalancer
+  selector:
+    name: mosaicmeweb

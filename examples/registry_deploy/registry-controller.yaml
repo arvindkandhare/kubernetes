@@ -28,7 +28,7 @@ spec:
                value:  emccode
 
              - name:   AWS_SECRET_KEY
-               value:  "EVvoB1IvvbDUgujG7Ibj1rxh1k8ug1cam+AdlnaW"
+               value:  "YNXscanl4wxbKx6n5wUWNoUk+dscIam+mkbUMM2v"
 
              - name:   AWS_BUCKET
                value:  "custom"
@@ -43,7 +43,7 @@ spec:
                value:  "Custom"
 
              - name:   BUCKET_ENDPOINT
-               value:  "http://146.148.78.227:9020/"
+               value:  "http://104.197.191.38:9020/"
 
              - name:   REGISTRY_HTTP_TLS_CERTIFICATE
                value:  "/host/certs/domain.crt" 
