@@ -39,6 +39,7 @@ import (
 	apierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apiserver"
 	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
@@ -125,17 +126,21 @@ func startComponents(firstManifestURL, secondManifestURL string) (string, string
 		glog.Fatalf("Failed to connect to etcd")
 	}
 
-	cl := client.NewOrDie(&client.Config{Host: apiServer.URL, Version: testapi.Default.Version()})
+	cl := client.NewOrDie(&client.Config{Host: apiServer.URL, Version: testapi.Default.GroupAndVersion()})
 
 	// TODO: caesarxuchao: hacky way to specify version of Experimental client.
 	// We will fix this by supporting multiple group versions in Config
-	cl.ExperimentalClient = client.NewExperimentalOrDie(&client.Config{Host: apiServer.URL, Version: testapi.Experimental.Version()})
+	cl.ExperimentalClient = client.NewExperimentalOrDie(&client.Config{Host: apiServer.URL, Version: testapi.Experimental.GroupAndVersion()})
 
-	etcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, testapi.Default.Version(), etcdtest.PathPrefix())
+	storageVersions := make(map[string]string)
+	etcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, testapi.Default.GroupAndVersion(), etcdtest.PathPrefix())
+	storageVersions[""] = testapi.Default.GroupAndVersion()
 	if err != nil {
 		glog.Fatalf("Unable to get etcd storage: %v", err)
 	}
-	expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, testapi.Experimental.Version(), etcdtest.PathPrefix())
+	expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, testapi.Experimental.GroupAndVersion(), etcdtest.PathPrefix())
+	storageVersions["experimental"] = testapi.Experimental.GroupAndVersion()
+
 	if err != nil {
 		glog.Fatalf("Unable to get etcd storage for experimental: %v", err)
 	}
@@ -170,6 +175,7 @@ func startComponents(firstManifestURL, secondManifestURL string) (string, string
 		ReadWritePort:         portNumber,
 		PublicAddress:         publicAddress,
 		CacheTimeout:          2 * time.Second,
+		StorageVersions:       storageVersions,
 	})
 	handler.delegate = m.Handler
 
@@ -225,7 +231,8 @@ func startComponents(firstManifestURL, secondManifestURL string) (string, string
 		1*time.Second,  /* HTTPCheckFrequency */
 		10*time.Second, /* MinimumGCAge */
 		3*time.Second,  /* NodeStatusUpdateFrequency */
-		10*time.Second /* SyncFrequency */)
+		10*time.Second, /* SyncFrequency */
+		40 /* MaxPods */)
 
 	kubeletapp.RunKubelet(kcfg, nil)
 	// Kubelet (machine)
@@ -255,7 +262,8 @@ func startComponents(firstManifestURL, secondManifestURL string) (string, string
 		1*time.Second,  /* HTTPCheckFrequency */
 		10*time.Second, /* MinimumGCAge */
 		3*time.Second,  /* NodeStatusUpdateFrequency */
-		10*time.Second /* SyncFrequency */)
+		10*time.Second, /* SyncFrequency */
+		40 /* MaxPods */)
 
 	kubeletapp.RunKubelet(kcfg, nil)
 	return apiServer.URL, configFilePath
@@ -545,7 +553,7 @@ func runSelfLinkTestOnNamespace(c *client.Client, namespace string) {
 
 func runAtomicPutTest(c *client.Client) {
 	svcBody := api.Service{
-		TypeMeta: api.TypeMeta{
+		TypeMeta: unversioned.TypeMeta{
 			APIVersion: c.APIVersion(),
 		},
 		ObjectMeta: api.ObjectMeta{
@@ -627,7 +635,7 @@ func runPatchTest(c *client.Client) {
 	name := "patchservice"
 	resource := "services"
 	svcBody := api.Service{
-		TypeMeta: api.TypeMeta{
+		TypeMeta: unversioned.TypeMeta{
 			APIVersion: c.APIVersion(),
 		},
 		ObjectMeta: api.ObjectMeta{
@@ -968,10 +976,10 @@ func main() {
 	// Wait for the synchronization threads to come up.
 	time.Sleep(time.Second * 10)
 
-	kubeClient := client.NewOrDie(&client.Config{Host: apiServerURL, Version: testapi.Default.Version()})
+	kubeClient := client.NewOrDie(&client.Config{Host: apiServerURL, Version: testapi.Default.GroupAndVersion()})
 	// TODO: caesarxuchao: hacky way to specify version of Experimental client.
 	// We will fix this by supporting multiple group versions in Config
-	kubeClient.ExperimentalClient = client.NewExperimentalOrDie(&client.Config{Host: apiServerURL, Version: testapi.Experimental.Version()})
+	kubeClient.ExperimentalClient = client.NewExperimentalOrDie(&client.Config{Host: apiServerURL, Version: testapi.Experimental.GroupAndVersion()})
 
 	// Run tests in parallel
 	testFuncs := []testFunc{

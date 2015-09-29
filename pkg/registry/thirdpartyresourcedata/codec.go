@@ -20,11 +20,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 
-	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/runtime"
 )
@@ -33,9 +34,17 @@ type thirdPartyResourceDataMapper struct {
 	mapper  meta.RESTMapper
 	kind    string
 	version string
+	group   string
+}
+
+func (t *thirdPartyResourceDataMapper) isThirdPartyResource(resource string) bool {
+	return resource == strings.ToLower(t.kind)+"s"
 }
 
 func (t *thirdPartyResourceDataMapper) GroupForResource(resource string) (string, error) {
+	if t.isThirdPartyResource(resource) {
+		return t.group, nil
+	}
 	return t.mapper.GroupForResource(resource)
 }
 
@@ -49,7 +58,7 @@ func (t *thirdPartyResourceDataMapper) RESTMapping(kind string, versions ...stri
 	if kind != "ThirdPartyResourceData" {
 		return nil, fmt.Errorf("unknown kind %s expected %s", kind, t.kind)
 	}
-	mapping, err := t.mapper.RESTMapping("ThirdPartyResourceData", latest.GroupOrDie("experimental").Version)
+	mapping, err := t.mapper.RESTMapping("ThirdPartyResourceData", latest.GroupOrDie("experimental").GroupVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -66,14 +75,18 @@ func (t *thirdPartyResourceDataMapper) ResourceSingularizer(resource string) (si
 }
 
 func (t *thirdPartyResourceDataMapper) VersionAndKindForResource(resource string) (defaultVersion, kind string, err error) {
+	if t.isThirdPartyResource(resource) {
+		return t.version, t.kind, nil
+	}
 	return t.mapper.VersionAndKindForResource(resource)
 }
 
-func NewMapper(mapper meta.RESTMapper, kind, version string) meta.RESTMapper {
+func NewMapper(mapper meta.RESTMapper, kind, version, group string) meta.RESTMapper {
 	return &thirdPartyResourceDataMapper{
 		mapper:  mapper,
 		kind:    kind,
 		version: version,
+		group:   group,
 	}
 }
 
@@ -100,7 +113,7 @@ func (t *thirdPartyResourceDataCodec) populate(objIn *experimental.ThirdPartyRes
 }
 
 func (t *thirdPartyResourceDataCodec) populateFromObject(objIn *experimental.ThirdPartyResourceData, mapObj map[string]interface{}, data []byte) error {
-	typeMeta := api.TypeMeta{}
+	typeMeta := unversioned.TypeMeta{}
 	if err := json.Unmarshal(data, &typeMeta); err != nil {
 		return err
 	}
@@ -207,40 +220,49 @@ const template = `{
   "items": [ %s ]
 }`
 
-func encodeToJSON(obj *experimental.ThirdPartyResourceData) ([]byte, error) {
+func encodeToJSON(obj *experimental.ThirdPartyResourceData, stream io.Writer) error {
 	var objOut interface{}
 	if err := json.Unmarshal(obj.Data, &objOut); err != nil {
-		return nil, err
+		return err
 	}
 	objMap, ok := objOut.(map[string]interface{})
 	if !ok {
-		return nil, fmt.Errorf("unexpected type: %v", objOut)
+		return fmt.Errorf("unexpected type: %v", objOut)
 	}
 	objMap["metadata"] = obj.ObjectMeta
-	return json.Marshal(objMap)
+	encoder := json.NewEncoder(stream)
+	return encoder.Encode(objMap)
 }
 
-func (t *thirdPartyResourceDataCodec) Encode(obj runtime.Object) (data []byte, err error) {
+func (t *thirdPartyResourceDataCodec) Encode(obj runtime.Object) ([]byte, error) {
+	buff := &bytes.Buffer{}
+	if err := t.EncodeToStream(obj, buff); err != nil {
+		return nil, err
+	}
+	return buff.Bytes(), nil
+}
+
+func (t *thirdPartyResourceDataCodec) EncodeToStream(obj runtime.Object, stream io.Writer) (err error) {
 	switch obj := obj.(type) {
 	case *experimental.ThirdPartyResourceData:
-		return encodeToJSON(obj)
+		return encodeToJSON(obj, stream)
 	case *experimental.ThirdPartyResourceDataList:
 		// TODO: There must be a better way to do this...
-		buff := &bytes.Buffer{}
 		dataStrings := make([]string, len(obj.Items))
 		for ix := range obj.Items {
-			data, err := encodeToJSON(&obj.Items[ix])
+			buff := &bytes.Buffer{}
+			err := encodeToJSON(&obj.Items[ix], buff)
 			if err != nil {
-				return nil, err
+				return err
 			}
-			dataStrings[ix] = string(data)
+			dataStrings[ix] = buff.String()
 		}
-		fmt.Fprintf(buff, template, t.kind+"List", strings.Join(dataStrings, ","))
-		return buff.Bytes(), nil
-	case *api.Status:
-		return t.delegate.Encode(obj)
+		fmt.Fprintf(stream, template, t.kind+"List", strings.Join(dataStrings, ","))
+		return nil
+	case *unversioned.Status:
+		return t.delegate.EncodeToStream(obj, stream)
 	default:
-		return nil, fmt.Errorf("unexpected object to encode: %#v", obj)
+		return fmt.Errorf("unexpected object to encode: %#v", obj)
 	}
 }
 
@@ -254,15 +276,18 @@ type thirdPartyResourceDataCreator struct {
 }
 
 func (t *thirdPartyResourceDataCreator) New(version, kind string) (out runtime.Object, err error) {
-	if t.version != version {
-		return nil, fmt.Errorf("unknown version %s for kind %s", version, kind)
-	}
 	switch kind {
 	case "ThirdPartyResourceData":
+		if t.version != version {
+			return nil, fmt.Errorf("unknown version %s for kind %s", version, kind)
+		}
 		return &experimental.ThirdPartyResourceData{}, nil
 	case "ThirdPartyResourceDataList":
+		if t.version != version {
+			return nil, fmt.Errorf("unknown version %s for kind %s", version, kind)
+		}
 		return &experimental.ThirdPartyResourceDataList{}, nil
 	default:
-		return t.delegate.New(latest.GroupOrDie("experimental").Version, kind)
+		return t.delegate.New(version, kind)
 	}
 }

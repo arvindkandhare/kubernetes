@@ -438,7 +438,7 @@ func (q *queuer) Run(done <-chan struct{}) {
 
 			pod := p.(*Pod)
 			if recoverAssignedSlave(pod.Pod) != "" {
-				log.V(3).Infof("dequeuing pod for scheduling: %v", pod.Pod.Name)
+				log.V(3).Infof("dequeuing assigned pod for scheduling: %v", pod.Pod.Name)
 				q.dequeue(pod.GetUID())
 			} else {
 				// use ReplaceExisting because we are always pushing the latest state
@@ -739,6 +739,16 @@ func (s *schedulingPlugin) Run(done <-chan struct{}) {
 // with the Modeler stuff removed since we don't use it because we have mesos.
 func (s *schedulingPlugin) scheduleOne() {
 	pod := s.config.NextPod()
+
+	// pods which are pre-scheduled (i.e. NodeName is set) are deleted by the kubelet
+	// in upstream. Not so in Mesos because the kubelet hasn't see that pod yet. Hence,
+	// the scheduler has to take care of this:
+	if pod.Spec.NodeName != "" && pod.DeletionTimestamp != nil {
+		log.V(3).Infof("deleting pre-scheduled, not yet running pod: %s/%s", pod.Namespace, pod.Name)
+		s.client.Pods(pod.Namespace).Delete(pod.Name, api.NewDeleteOptions(0))
+		return
+	}
+
 	log.V(3).Infof("Attempting to schedule: %+v", pod)
 	dest, err := s.config.Algorithm.Schedule(pod, s.config.NodeLister) // call kubeScheduler.Schedule
 	if err != nil {

@@ -38,6 +38,8 @@ import (
 	"k8s.io/kubernetes/pkg/controller/daemon"
 	"k8s.io/kubernetes/pkg/controller/deployment"
 	"k8s.io/kubernetes/pkg/controller/endpoint"
+	"k8s.io/kubernetes/pkg/controller/gc"
+	"k8s.io/kubernetes/pkg/controller/job"
 	"k8s.io/kubernetes/pkg/controller/namespace"
 	"k8s.io/kubernetes/pkg/controller/node"
 	"k8s.io/kubernetes/pkg/controller/persistentvolume"
@@ -66,12 +68,14 @@ type CMServer struct {
 	ConcurrentEndpointSyncs           int
 	ConcurrentRCSyncs                 int
 	ConcurrentDSCSyncs                int
+	ConcurrentJobSyncs                int
 	ServiceSyncPeriod                 time.Duration
 	NodeSyncPeriod                    time.Duration
 	ResourceQuotaSyncPeriod           time.Duration
 	NamespaceSyncPeriod               time.Duration
 	PVClaimBinderSyncPeriod           time.Duration
 	VolumeConfigFlags                 VolumeConfigFlags
+	TerminatedPodGCThreshold          int
 	HorizontalPodAutoscalerSyncPeriod time.Duration
 	DeploymentControllerSyncPeriod    time.Duration
 	RegisterRetryCount                int
@@ -104,12 +108,13 @@ func NewCMServer() *CMServer {
 		ConcurrentEndpointSyncs:           5,
 		ConcurrentRCSyncs:                 5,
 		ConcurrentDSCSyncs:                2,
+		ConcurrentJobSyncs:                5,
 		ServiceSyncPeriod:                 5 * time.Minute,
 		NodeSyncPeriod:                    10 * time.Second,
 		ResourceQuotaSyncPeriod:           10 * time.Second,
 		NamespaceSyncPeriod:               5 * time.Minute,
 		PVClaimBinderSyncPeriod:           10 * time.Second,
-		HorizontalPodAutoscalerSyncPeriod: 1 * time.Minute,
+		HorizontalPodAutoscalerSyncPeriod: 30 * time.Second,
 		DeploymentControllerSyncPeriod:    1 * time.Minute,
 		RegisterRetryCount:                10,
 		PodEvictionTimeout:                5 * time.Minute,
@@ -161,6 +166,7 @@ func (s *CMServer) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerPodTemplateFilePathHostPath, "pv-recycler-pod-template-filepath-hostpath", s.VolumeConfigFlags.PersistentVolumeRecyclerPodTemplateFilePathHostPath, "The file path to a pod definition used as a template for HostPath persistent volume recycling. This is for development and testing only and will not work in a multi-node cluster.")
 	fs.IntVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerMinimumTimeoutHostPath, "pv-recycler-minimum-timeout-hostpath", s.VolumeConfigFlags.PersistentVolumeRecyclerMinimumTimeoutHostPath, "The minimum ActiveDeadlineSeconds to use for a HostPath Recycler pod.  This is for development and testing only and will not work in a multi-node cluster.")
 	fs.IntVar(&s.VolumeConfigFlags.PersistentVolumeRecyclerIncrementTimeoutHostPath, "pv-recycler-timeout-increment-hostpath", s.VolumeConfigFlags.PersistentVolumeRecyclerIncrementTimeoutHostPath, "the increment of time added per Gi to ActiveDeadlineSeconds for a HostPath scrubber pod.  This is for development and testing only and will not work in a multi-node cluster.")
+	fs.IntVar(&s.TerminatedPodGCThreshold, "terminated-pod-gc-threshold", s.TerminatedPodGCThreshold, "Number of terminated pods that can exist before the terminated pod garbage collector starts deleting terminated pods. If <= 0, the terminated pod garbage collector is disabled.")
 	fs.DurationVar(&s.HorizontalPodAutoscalerSyncPeriod, "horizontal-pod-autoscaler-sync-period", s.HorizontalPodAutoscalerSyncPeriod, "The period for syncing the number of pods in horizontal pod autoscaler.")
 	fs.DurationVar(&s.DeploymentControllerSyncPeriod, "deployment-controller-sync-period", s.DeploymentControllerSyncPeriod, "Period for syncing the deployments.")
 	fs.DurationVar(&s.PodEvictionTimeout, "pod-eviction-timeout", s.PodEvictionTimeout, "The grace period for deleting pods on failed nodes.")
@@ -237,6 +243,14 @@ func (s *CMServer) Run(_ []string) error {
 
 	go daemon.NewDaemonSetsController(kubeClient).
 		Run(s.ConcurrentDSCSyncs, util.NeverStop)
+
+	go job.NewJobController(kubeClient).
+		Run(s.ConcurrentJobSyncs, util.NeverStop)
+
+	if s.TerminatedPodGCThreshold > 0 {
+		go gc.New(kubeClient, s.TerminatedPodGCThreshold).
+			Run(util.NeverStop)
+	}
 
 	cloud, err := cloudprovider.InitCloudProvider(s.CloudProvider, s.CloudConfigFile)
 	if err != nil {

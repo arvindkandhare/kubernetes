@@ -130,26 +130,32 @@ func startMasterOrDie(masterConfig *master.Config) (*master.Master, *httptest.Se
 	var err error
 	if masterConfig == nil {
 		etcdClient := NewEtcdClient()
-		etcdStorage, err = master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, latest.GroupOrDie("").Version, etcdtest.PathPrefix())
+		storageVersions := make(map[string]string)
+		etcdStorage, err = master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, latest.GroupOrDie("").GroupVersion, etcdtest.PathPrefix())
+		storageVersions[""] = latest.GroupOrDie("").GroupVersion
 		if err != nil {
 			glog.Fatalf("Failed to create etcd storage for master %v", err)
 		}
-		expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, latest.GroupOrDie("experimental").Version, etcdtest.PathPrefix())
+		expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, latest.GroupOrDie("experimental").GroupVersion, etcdtest.PathPrefix())
+		storageVersions["experimental"] = latest.GroupOrDie("experimental").GroupVersion
 		if err != nil {
 			glog.Fatalf("Failed to create etcd storage for master %v", err)
 		}
 
 		masterConfig = &master.Config{
-			DatabaseStorage:    etcdStorage,
-			ExpDatabaseStorage: expEtcdStorage,
-			KubeletClient:      client.FakeKubeletClient{},
-			EnableLogsSupport:  false,
-			EnableProfiling:    true,
-			EnableUISupport:    false,
-			APIPrefix:          "/api",
-			APIGroupPrefix:     "/apis",
-			Authorizer:         apiserver.NewAlwaysAllowAuthorizer(),
-			AdmissionControl:   admit.NewAlwaysAdmit(),
+			DatabaseStorage:      etcdStorage,
+			ExpDatabaseStorage:   expEtcdStorage,
+			StorageVersions:      storageVersions,
+			KubeletClient:        client.FakeKubeletClient{},
+			EnableExp:            true,
+			EnableLogsSupport:    false,
+			EnableProfiling:      true,
+			EnableSwaggerSupport: true,
+			EnableUISupport:      false,
+			APIPrefix:            "/api",
+			APIGroupPrefix:       "/apis",
+			Authorizer:           apiserver.NewAlwaysAllowAuthorizer(),
+			AdmissionControl:     admit.NewAlwaysAdmit(),
 		}
 	} else {
 		etcdStorage = masterConfig.DatabaseStorage
@@ -202,7 +208,7 @@ func StopRC(rc *api.ReplicationController, restClient *client.Client) error {
 
 // ScaleRC scales the given rc to the given replicas.
 func ScaleRC(name, ns string, replicas int, restClient *client.Client) (*api.ReplicationController, error) {
-	scaler, err := kubectl.ScalerFor("ReplicationController", kubectl.NewScalerClient(restClient))
+	scaler, err := kubectl.ScalerFor("ReplicationController", restClient)
 	if err != nil {
 		return nil, err
 	}
@@ -268,11 +274,14 @@ func StartPods(numPods int, host string, restClient *client.Client) error {
 // TODO: Merge this into startMasterOrDie.
 func RunAMaster(t *testing.T) (*master.Master, *httptest.Server) {
 	etcdClient := NewEtcdClient()
-	etcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, testapi.Default.Version(), etcdtest.PathPrefix())
+	storageVersions := make(map[string]string)
+	etcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("").InterfacesFor, testapi.Default.GroupAndVersion(), etcdtest.PathPrefix())
+	storageVersions[""] = testapi.Default.Version()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, latest.GroupOrDie("experimental").Version, etcdtest.PathPrefix())
+	expEtcdStorage, err := master.NewEtcdStorage(etcdClient, latest.GroupOrDie("experimental").InterfacesFor, testapi.Experimental.GroupAndVersion(), etcdtest.PathPrefix())
+	storageVersions["experimental"] = testapi.Experimental.GroupAndVersion()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,6 +298,7 @@ func RunAMaster(t *testing.T) (*master.Master, *httptest.Server) {
 		EnableExp:          true,
 		Authorizer:         apiserver.NewAlwaysAllowAuthorizer(),
 		AdmissionControl:   admit.NewAlwaysAdmit(),
+		StorageVersions:    storageVersions,
 	})
 
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

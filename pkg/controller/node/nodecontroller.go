@@ -25,6 +25,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/cloudprovider"
@@ -36,9 +37,7 @@ import (
 )
 
 var (
-	ErrRegistration   = errors.New("unable to register all nodes.")
-	ErrQueryIPAddress = errors.New("unable to query IP address.")
-	ErrCloudInstance  = errors.New("cloud provider doesn't support instances.")
+	ErrCloudInstance = errors.New("cloud provider doesn't support instances.")
 )
 
 const (
@@ -49,8 +48,8 @@ const (
 )
 
 type nodeStatusData struct {
-	probeTimestamp           util.Time
-	readyTransitionTimestamp util.Time
+	probeTimestamp           unversioned.Time
+	readyTransitionTimestamp unversioned.Time
 	status                   api.NodeStatus
 }
 
@@ -89,7 +88,7 @@ type NodeController struct {
 	// This timestamp is to be used instead of LastProbeTime stored in Condition. We do this
 	// to aviod the problem with time skew across the cluster.
 	nodeStatusMap map[string]nodeStatusData
-	now           func() util.Time
+	now           func() unversioned.Time
 	// Lock to access evictor workers
 	evictorLock *sync.Mutex
 	// workers that evicts pods from unresponsive nodes.
@@ -140,7 +139,7 @@ func NewNodeController(
 		nodeMonitorPeriod:      nodeMonitorPeriod,
 		nodeStartupGracePeriod: nodeStartupGracePeriod,
 		lookupIP:               net.LookupIP,
-		now:                    util.Now,
+		now:                    unversioned.Now,
 		clusterCIDR:            clusterCIDR,
 		allocateNodeCIDRs:      allocateNodeCIDRs,
 	}
@@ -270,9 +269,6 @@ func (nc *NodeController) monitorNodeStatus() error {
 		}
 	}
 
-	if err != nil {
-		return err
-	}
 	if nc.allocateNodeCIDRs {
 		// TODO (cjcullen): Use pkg/controller/framework to watch nodes and
 		// reduce lists/decouple this from monitoring status.
@@ -380,13 +376,13 @@ func (nc *NodeController) reconcileNodeCIDRs(nodes *api.NodeList) {
 		if node.Spec.PodCIDR == "" {
 			podCIDR, found := availableCIDRs.PopAny()
 			if !found {
-				nc.recordNodeStatusChange(&node, "No available CIDR")
+				nc.recordNodeStatusChange(&node, "CIDRNotAvailable")
 				continue
 			}
 			glog.V(4).Infof("Assigning node %s CIDR %s", node.Name, podCIDR)
 			node.Spec.PodCIDR = podCIDR
 			if _, err := nc.kubeClient.Nodes().Update(&node); err != nil {
-				nc.recordNodeStatusChange(&node, "CIDR assignment failed")
+				nc.recordNodeStatusChange(&node, "CIDRAssignmentFailed")
 			}
 		}
 	}
@@ -488,7 +484,7 @@ func (nc *NodeController) tryUpdateNodeStatus(node *api.Node) (time.Duration, ap
 		}
 		nc.nodeStatusMap[node.Name] = savedNodeStatus
 	} else if savedCondition != nil && observedCondition != nil && savedCondition.LastHeartbeatTime != observedCondition.LastHeartbeatTime {
-		var transitionTime util.Time
+		var transitionTime unversioned.Time
 		// If ReadyCondition changed since the last time we checked, we update the transition timestamp to "now",
 		// otherwise we leave it as it is.
 		if savedCondition.LastTransitionTime != observedCondition.LastTransitionTime {

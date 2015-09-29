@@ -23,6 +23,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/client/record"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
@@ -33,9 +34,6 @@ import (
 )
 
 const (
-	heapsterNamespace = "kube-system"
-	heapsterService   = "monitoring-heapster"
-
 	// Usage shoud exceed the tolerance before we start downscale or upscale the pods.
 	// TODO: make it a flag or HPA spec element.
 	tolerance = 0.1
@@ -47,8 +45,8 @@ type HorizontalController struct {
 	eventRecorder record.EventRecorder
 }
 
-var downscaleForbiddenWindow, _ = time.ParseDuration("20m")
-var upscaleForbiddenWindow, _ = time.ParseDuration("3m")
+var downscaleForbiddenWindow = 5 * time.Minute
+var upscaleForbiddenWindow = 3 * time.Minute
 
 func NewHorizontalController(client client.Interface, metricsClient metrics.MetricsClient) *HorizontalController {
 	broadcaster := record.NewBroadcaster()
@@ -79,8 +77,9 @@ func (a *HorizontalController) reconcileAutoscaler(hpa experimental.HorizontalPo
 		return fmt.Errorf("failed to query scale subresource for %s: %v", reference, err)
 	}
 	currentReplicas := scale.Status.Replicas
-	currentConsumption, err := a.metricsClient.ResourceConsumption(hpa.Spec.ScaleRef.Namespace).Get(hpa.Spec.Target.Resource,
-		scale.Status.Selector)
+	currentConsumption, err := a.metricsClient.
+		ResourceConsumption(hpa.Spec.ScaleRef.Namespace).
+		Get(hpa.Spec.Target.Resource, scale.Status.Selector)
 
 	// TODO: what to do on partial errors (like metrics obtained for 75% of pods).
 	if err != nil {
@@ -91,8 +90,8 @@ func (a *HorizontalController) reconcileAutoscaler(hpa experimental.HorizontalPo
 	usageRatio := float64(currentConsumption.Quantity.MilliValue()) / float64(hpa.Spec.Target.Quantity.MilliValue())
 	desiredReplicas := int(math.Ceil(usageRatio * float64(currentReplicas)))
 
-	if desiredReplicas < hpa.Spec.MinCount {
-		desiredReplicas = hpa.Spec.MinCount
+	if desiredReplicas < hpa.Spec.MinReplicas {
+		desiredReplicas = hpa.Spec.MinReplicas
 	}
 
 	// TODO: remove when pod ideling is done.
@@ -100,8 +99,8 @@ func (a *HorizontalController) reconcileAutoscaler(hpa experimental.HorizontalPo
 		desiredReplicas = 1
 	}
 
-	if desiredReplicas > hpa.Spec.MaxCount {
-		desiredReplicas = hpa.Spec.MaxCount
+	if desiredReplicas > hpa.Spec.MaxReplicas {
+		desiredReplicas = hpa.Spec.MaxReplicas
 	}
 	now := time.Now()
 	rescale := false
@@ -143,7 +142,7 @@ func (a *HorizontalController) reconcileAutoscaler(hpa experimental.HorizontalPo
 	}
 	hpa.Status = &status
 	if rescale {
-		now := util.NewTime(now)
+		now := unversioned.NewTime(now)
 		hpa.Status.LastScaleTimestamp = &now
 	}
 

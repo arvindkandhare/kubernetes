@@ -33,7 +33,7 @@ Documentation for other releases can be found at
 API Conventions
 ===============
 
-Updated: 8/24/2015
+Updated: 9/20/2015
 
 *This document is oriented at users who want a deeper understanding of the Kubernetes
 API structure, and developers wanting to extend the Kubernetes API.  An introduction to
@@ -189,8 +189,8 @@ The `FooCondition` type for some resource type `Foo` may include a subset of the
 ```golang
 	Type               FooConditionType  `json:"type" description:"type of Foo condition"`
 	Status             ConditionStatus   `json:"status" description:"status of the condition, one of True, False, Unknown"`
-	LastHeartbeatTime  util.Time         `json:"lastHeartbeatTime,omitempty" description:"last time we got an update on a given condition"`
-	LastTransitionTime util.Time         `json:"lastTransitionTime,omitempty" description:"last time the condition transit from one status to another"`
+	LastHeartbeatTime  unversioned.Time         `json:"lastHeartbeatTime,omitempty" description:"last time we got an update on a given condition"`
+	LastTransitionTime unversioned.Time         `json:"lastTransitionTime,omitempty" description:"last time the condition transit from one status to another"`
 	Reason             string            `json:"reason,omitempty" description:"one-word CamelCase reason for the condition's last transition"`
 	Message            string            `json:"message,omitempty" description:"human-readable message indicating details about last transition"`
 ```
@@ -712,7 +712,7 @@ Therefore, resources supporting auto-generation of unique labels should have a `
 
 Annotations have very different intended usage from labels. We expect them to be primarily generated and consumed by tooling and system extensions. I'm inclined to generalize annotations to permit them to directly store arbitrary json. Rigid names and name prefixes make sense, since they are analogous to API fields.
 
-In fact, experimental API fields, including to represent fields of newer alpha/beta API versions in the older, stable storage version, may be represented as annotations with the prefix `experimental.kubernetes.io/`.
+In fact, experimental API fields, including those used to represent fields of newer alpha/beta API versions in the older stable storage version, may be represented as annotations with the form `something.experimental.kubernetes.io/name`.  For example `net.experimental.kubernetes.io/policy` might represent an experimental network policy field.
 
 Other advice regarding use of labels, annotations, and other generic map keys by Kubernetes components and tools:
   - Key names should be all lowercase, with words separated by dashes, such as `desired-replicas`

@@ -110,21 +110,6 @@ func TestMaxInFlight(t *testing.T) {
 	expectHTTP(server.URL, http.StatusOK, t)
 }
 
-func TestRateLimit(t *testing.T) {
-	for _, allow := range []bool{true, false} {
-		rl := fakeRL(allow)
-		server := httptest.NewServer(RateLimit(rl, http.HandlerFunc(
-			func(w http.ResponseWriter, req *http.Request) {
-				if !allow {
-					t.Errorf("Unexpected call")
-				}
-			},
-		)))
-		defer server.Close()
-		http.Get(server.URL)
-	}
-}
-
 func TestReadOnly(t *testing.T) {
 	server := httptest.NewServer(ReadOnly(http.HandlerFunc(
 		func(w http.ResponseWriter, req *http.Request) {
@@ -243,6 +228,10 @@ func TestGetAPIRequestInfo(t *testing.T) {
 		// subresource identification
 		{"GET", "/namespaces/other/pods/foo/status", "get", "", "other", "pods", "status", "Pod", "foo", []string{"pods", "foo", "status"}},
 		{"PUT", "/namespaces/other/finalize", "update", "", "other", "finalize", "", "", "", []string{"finalize"}},
+
+		// verb identification
+		{"PATCH", "/namespaces/other/pods/foo", "patch", "", "other", "pods", "", "Pod", "foo", []string{"pods", "foo"}},
+		{"DELETE", "/namespaces/other/pods/foo", "delete", "", "other", "pods", "", "Pod", "foo", []string{"pods", "foo"}},
 	}
 
 	apiRequestInfoResolver := &APIRequestInfoResolver{sets.NewString("api"), testapi.Default.RESTMapper()}

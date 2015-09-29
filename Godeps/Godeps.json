@@ -154,7 +154,7 @@
 		},
 		{
 			"ImportPath": "github.com/cpuguy83/go-md2man/md2man",
-			"Comment": "v1.0.3-2-g71acacd",
+			"Comment": "v1.0.4",
 			"Rev": "71acacd42f85e5e82f70a55327789582a5200a90"
 		},
 		{
@@ -211,7 +211,7 @@
 		},
 		{
 			"ImportPath": "github.com/elazarl/go-bindata-assetfs",
-			"Rev": "c57a80f1ab2ad67bafa83f5fd0b4c2ecbd253dd5"
+			"Rev": "3dcc96556217539f50599357fb481ac0dc7439b9"
 		},
 		{
 			"ImportPath": "github.com/emicklei/go-restful",
@@ -245,7 +245,8 @@
 		},
 		{
 			"ImportPath": "github.com/gogo/protobuf/proto",
-			"Rev": "ab6cea4a44ef42b748cd88d2d372047b75806e0c"
+			"Comment": "v0.1-55-g2093b57",
+			"Rev": "2093b57e5ca2ccbee4626814100bc1aada691b18"
 		},
 		{
 			"ImportPath": "github.com/golang/glog",
@@ -354,6 +355,10 @@
 			"Rev": "bbcb9da2d746f8bdbd6a936686a0a6067ada0ec5"
 		},
 		{
+			"ImportPath": "github.com/google/google-api-go-client/cloudmonitoring/v2beta2",
+			"Rev": "8cbf97d5e925c857511aedf459affeed490e6861"
+		},
+		{
 			"ImportPath": "github.com/gorilla/context",
 			"Rev": "215affda49addc4c8ef7e2534915df2c8c35c6cd"
 		},
@@ -398,35 +403,43 @@
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/auth",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/detector",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/executor",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosproto",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/mesosutil",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/messenger",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/scheduler",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/mesos/mesos-go/upid",
-			"Rev": "65cb9ffec50a76f4ed9fe4808405b66b3bb7010d"
+			"Comment": "mesos-0.24.0-20-gb164c06",
+			"Rev": "b164c06f346af1e93aecb6502f83d31dbacdbb91"
 		},
 		{
 			"ImportPath": "github.com/miekg/dns",
@@ -485,8 +498,8 @@
 		},
 		{
 			"ImportPath": "github.com/rackspace/gophercloud",
-			"Comment": "v1.0.0-569-gf3ced00",
-			"Rev": "f3ced00552c1c7d4a6184500af9062cfb4ff4463"
+			"Comment": "v1.0.0-665-gf928634",
+			"Rev": "f92863476c034f851073599c09d90cd61ee95b3d"
 		},
 		{
 			"ImportPath": "github.com/russross/blackfriday",
@@ -495,7 +508,7 @@
 		},
 		{
 			"ImportPath": "github.com/samuel/go-zookeeper/zk",
-			"Rev": "d0e0d8e11f318e000a8cc434616d69e329edc374"
+			"Rev": "177002e16a0061912f02377e2dd8951a8b3551bc"
 		},
 		{
 			"ImportPath": "github.com/scalingdata/gcfg",
@@ -516,6 +529,7 @@
 		},
 		{
 			"ImportPath": "github.com/spf13/pflag",
+			"Comment": "v0.0.1-99-g8e7dc10",
 			"Rev": "8e7dc108ab3a1ab6ce6d922bbaff5657b88e8e49"
 		},
 		{

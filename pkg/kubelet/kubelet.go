@@ -38,6 +38,7 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	apierrors "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/client/cache"
 	"k8s.io/kubernetes/pkg/client/record"
@@ -61,6 +62,7 @@ import (
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/bandwidth"
 	utilErrors "k8s.io/kubernetes/pkg/util/errors"
+	kubeio "k8s.io/kubernetes/pkg/util/io"
 	"k8s.io/kubernetes/pkg/util/mount"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
 	"k8s.io/kubernetes/pkg/util/oom"
@@ -167,6 +169,7 @@ func NewMainKubelet(
 	rktPath string,
 	rktStage1Image string,
 	mounter mount.Interface,
+	writer kubeio.Writer,
 	dockerDaemonContainer string,
 	systemContainer string,
 	configureCBR0 bool,
@@ -287,6 +290,7 @@ func NewMainKubelet(
 		oomWatcher:                     oomWatcher,
 		cgroupRoot:                     cgroupRoot,
 		mounter:                        mounter,
+		writer:                         writer,
 		configureCBR0:                  configureCBR0,
 		podCIDR:                        podCIDR,
 		pods:                           pods,
@@ -358,7 +362,7 @@ func NewMainKubelet(
 
 	// Setup container manager, can fail if the devices hierarchy is not mounted
 	// (it is required by Docker however).
-	containerManager, err := newContainerManager(cadvisorInterface, dockerDaemonContainer, systemContainer, resourceContainer)
+	containerManager, err := newContainerManager(mounter, cadvisorInterface, dockerDaemonContainer, systemContainer, resourceContainer)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create the Container Manager: %v", err)
 	}
@@ -543,6 +547,9 @@ type Kubelet struct {
 
 	// Mounter to use for volumes.
 	mounter mount.Interface
+
+	// Writer interface to use for volumes.
+	writer kubeio.Writer
 
 	// Manager of non-Runtime containers.
 	containerManager containerManager
@@ -751,6 +758,7 @@ func (kl *Kubelet) Run(updates <-chan PodUpdate) {
 
 	// Move Kubelet to a container.
 	if kl.resourceContainer != "" {
+		// Fixme: I need to reside inside ContainerManager interface.
 		err := util.RunInResourceContainer(kl.resourceContainer)
 		if err != nil {
 			glog.Warningf("Failed to move Kubelet to container %q: %v", kl.resourceContainer, err)
@@ -1306,7 +1314,7 @@ func (kl *Kubelet) syncPod(pod *api.Pod, mirrorPod *api.Pod, runningPod kubecont
 		}
 
 		podStatus = pod.Status
-		podStatus.StartTime = &util.Time{Time: start}
+		podStatus.StartTime = &unversioned.Time{Time: start}
 		kl.statusManager.SetPodStatus(pod, podStatus)
 		glog.V(3).Infof("Not generating pod status for new pod %q", podFullName)
 	} else {
@@ -1541,7 +1549,7 @@ func (kl *Kubelet) cleanupTerminatedPods(pods []*api.Pod, runningPods []*kubecon
 // pastActiveDeadline returns true if the pod has been active for more than
 // ActiveDeadlineSeconds.
 func (kl *Kubelet) pastActiveDeadline(pod *api.Pod) bool {
-	now := util.Now()
+	now := unversioned.Now()
 	if pod.Spec.ActiveDeadlineSeconds != nil {
 		podStatus, ok := kl.statusManager.GetPodStatus(pod.UID)
 		if !ok {
@@ -2072,7 +2080,7 @@ func (kl *Kubelet) validateContainerStatus(podStatus *api.PodStatus, containerNa
 // GetKubeletContainerLogs returns logs from the container
 // TODO: this method is returning logs of random container attempts, when it should be returning the most recent attempt
 // or all of them.
-func (kl *Kubelet) GetKubeletContainerLogs(podFullName, containerName, tail string, follow, previous bool, stdout, stderr io.Writer) error {
+func (kl *Kubelet) GetKubeletContainerLogs(podFullName, containerName string, logOptions *api.PodLogOptions, stdout, stderr io.Writer) error {
 	// TODO(vmarmol): Refactor to not need the pod status and verification.
 	// Pod workers periodically write status to statusManager. If status is not
 	// cached there, something is wrong (or kubelet just restarted and hasn't
@@ -2096,13 +2104,13 @@ func (kl *Kubelet) GetKubeletContainerLogs(podFullName, containerName, tail stri
 		// No log is available if pod is not in a "known" phase (e.g. Unknown).
 		return fmt.Errorf("Pod %q in namespace %q : %v", name, namespace, err)
 	}
-	containerID, err := kl.validateContainerStatus(&podStatus, containerName, previous)
+	containerID, err := kl.validateContainerStatus(&podStatus, containerName, logOptions.Previous)
 	if err != nil {
 		// No log is available if the container status is missing or is in the
 		// waiting state.
 		return fmt.Errorf("Pod %q in namespace %q: %v", name, namespace, err)
 	}
-	return kl.containerRuntime.GetContainerLogs(pod, containerID, tail, follow, stdout, stderr)
+	return kl.containerRuntime.GetContainerLogs(pod, containerID, logOptions, stdout, stderr)
 }
 
 // GetHostname Returns the hostname as the kubelet sees it.
@@ -2339,7 +2347,7 @@ func (kl *Kubelet) setNodeStatus(node *api.Node) error {
 	// Check whether network is configured properly
 	networkConfigured := kl.doneNetworkConfigure()
 
-	currentTime := util.Now()
+	currentTime := unversioned.Now()
 	var newNodeReadyCondition api.NodeCondition
 	var oldNodeReadyConditionStatus api.ConditionStatus
 	if containerRuntimeUp && networkConfigured {
@@ -2501,26 +2509,29 @@ func GetPhase(spec *api.PodSpec, info []api.ContainerStatus) api.PodPhase {
 	}
 }
 
+// Disabled LastProbeTime/LastTranitionTime for Pods to avoid constantly sending pod status
+// update to the apiserver. See http://issues.k8s.io/14273. Functional revert of a PR #12894
+
 // getPodReadyCondition returns ready condition if all containers in a pod are ready, else it returns an unready condition.
-func getPodReadyCondition(spec *api.PodSpec, statuses []api.ContainerStatus) []api.PodCondition {
+func getPodReadyCondition(spec *api.PodSpec, containerStatuses []api.ContainerStatus, existingStatus *api.PodStatus) []api.PodCondition {
 	ready := []api.PodCondition{{
 		Type:   api.PodReady,
 		Status: api.ConditionTrue,
 	}}
-	unready := []api.PodCondition{{
+	notReady := []api.PodCondition{{
 		Type:   api.PodReady,
 		Status: api.ConditionFalse,
 	}}
-	if statuses == nil {
-		return unready
+	if containerStatuses == nil {
+		return notReady
 	}
 	for _, container := range spec.Containers {
-		if containerStatus, ok := api.GetContainerStatus(statuses, container.Name); ok {
+		if containerStatus, ok := api.GetContainerStatus(containerStatuses, container.Name); ok {
 			if !containerStatus.Ready {
-				return unready
+				return notReady
 			}
 		} else {
-			return unready
+			return notReady
 		}
 	}
 	return ready
@@ -2537,8 +2548,7 @@ func (kl *Kubelet) generatePodStatus(pod *api.Pod) (api.PodStatus, error) {
 
 	podFullName := kubecontainer.GetPodFullName(pod)
 	glog.V(3).Infof("Generating status for %q", podFullName)
-
-	if existingStatus, ok := kl.statusManager.GetPodStatus(pod.UID); ok {
+	if existingStatus, hasExistingStatus := kl.statusManager.GetPodStatus(pod.UID); hasExistingStatus {
 		// This is a hacky fix to ensure container restart counts increment
 		// monotonically. Normally, we should not modify given pod. In this
 		// case, we check if there are cached status for this pod, and update
@@ -2590,8 +2600,7 @@ func (kl *Kubelet) generatePodStatus(pod *api.Pod) (api.PodStatus, error) {
 			}
 		}
 	}
-
-	podStatus.Conditions = append(podStatus.Conditions, getPodReadyCondition(spec, podStatus.ContainerStatuses)...)
+	podStatus.Conditions = append(podStatus.Conditions, getPodReadyCondition(spec, podStatus.ContainerStatuses, nil /* unused */)...)
 
 	if !kl.standaloneMode {
 		hostIP, err := kl.GetHostIP()

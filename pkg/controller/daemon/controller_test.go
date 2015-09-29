@@ -18,11 +18,11 @@ package daemon
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/client/cache"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
@@ -37,50 +37,13 @@ var (
 	simpleNodeLabel2      = map[string]string{"color": "red", "speed": "fast"}
 )
 
-type FakePodControl struct {
-	daemonSet     []experimental.DaemonSet
-	deletePodName []string
-	lock          sync.Mutex
-	err           error
-}
-
 func init() {
 	api.ForTesting_ReferencesAllowBlankSelfLinks = true
 }
 
-func (f *FakePodControl) CreateReplica(namespace string, spec *api.ReplicationController) error {
-	return nil
-}
-
-func (f *FakePodControl) CreateReplicaOnNode(namespace string, ds *experimental.DaemonSet, nodeName string) error {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.daemonSet = append(f.daemonSet, *ds)
-	return nil
-}
-
-func (f *FakePodControl) DeletePod(namespace string, podName string) error {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	if f.err != nil {
-		return f.err
-	}
-	f.deletePodName = append(f.deletePodName, podName)
-	return nil
-}
-func (f *FakePodControl) clear() {
-	f.lock.Lock()
-	defer f.lock.Unlock()
-	f.deletePodName = []string{}
-	f.daemonSet = []experimental.DaemonSet{}
-}
-
 func newDaemonSet(name string) *experimental.DaemonSet {
 	return &experimental.DaemonSet{
-		TypeMeta: api.TypeMeta{APIVersion: testapi.Experimental.Version()},
+		TypeMeta: unversioned.TypeMeta{APIVersion: testapi.Experimental.Version()},
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: api.NamespaceDefault,
@@ -109,7 +72,7 @@ func newDaemonSet(name string) *experimental.DaemonSet {
 
 func newNode(name string, label map[string]string) *api.Node {
 	return &api.Node{
-		TypeMeta: api.TypeMeta{APIVersion: testapi.Default.Version()},
+		TypeMeta: unversioned.TypeMeta{APIVersion: testapi.Default.Version()},
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Labels:    label,
@@ -126,7 +89,7 @@ func addNodes(nodeStore cache.Store, startIndex, numNodes int, label map[string]
 
 func newPod(podName string, nodeName string, label map[string]string) *api.Pod {
 	pod := &api.Pod{
-		TypeMeta: api.TypeMeta{APIVersion: testapi.Default.Version()},
+		TypeMeta: unversioned.TypeMeta{APIVersion: testapi.Default.Version()},
 		ObjectMeta: api.ObjectMeta{
 			GenerateName: podName,
 			Labels:       label,
@@ -155,24 +118,24 @@ func addPods(podStore cache.Store, nodeName string, label map[string]string, num
 	}
 }
 
-func newTestController() (*DaemonSetsController, *FakePodControl) {
-	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Experimental.Version()})
+func newTestController() (*DaemonSetsController, *controller.FakePodControl) {
+	client := client.NewOrDie(&client.Config{Host: "", Version: testapi.Default.GroupAndVersion()})
 	manager := NewDaemonSetsController(client)
-	podControl := &FakePodControl{}
+	podControl := &controller.FakePodControl{}
 	manager.podControl = podControl
 	return manager, podControl
 }
 
-func validateSyncDaemonSets(t *testing.T, fakePodControl *FakePodControl, expectedCreates, expectedDeletes int) {
-	if len(fakePodControl.daemonSet) != expectedCreates {
-		t.Errorf("Unexpected number of creates.  Expected %d, saw %d\n", expectedCreates, len(fakePodControl.daemonSet))
+func validateSyncDaemonSets(t *testing.T, fakePodControl *controller.FakePodControl, expectedCreates, expectedDeletes int) {
+	if len(fakePodControl.Templates) != expectedCreates {
+		t.Errorf("Unexpected number of creates.  Expected %d, saw %d\n", expectedCreates, len(fakePodControl.Templates))
 	}
-	if len(fakePodControl.deletePodName) != expectedDeletes {
-		t.Errorf("Unexpected number of deletes.  Expected %d, saw %d\n", expectedDeletes, len(fakePodControl.deletePodName))
+	if len(fakePodControl.DeletePodName) != expectedDeletes {
+		t.Errorf("Unexpected number of deletes.  Expected %d, saw %d\n", expectedDeletes, len(fakePodControl.DeletePodName))
 	}
 }
 
-func syncAndValidateDaemonSets(t *testing.T, manager *DaemonSetsController, ds *experimental.DaemonSet, podControl *FakePodControl, expectedCreates, expectedDeletes int) {
+func syncAndValidateDaemonSets(t *testing.T, manager *DaemonSetsController, ds *experimental.DaemonSet, podControl *controller.FakePodControl, expectedCreates, expectedDeletes int) {
 	key, err := controller.KeyFunc(ds)
 	if err != nil {
 		t.Errorf("Could not get key for daemon.")

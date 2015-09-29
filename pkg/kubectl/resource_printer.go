@@ -35,12 +35,12 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/jsonpath"
 	"k8s.io/kubernetes/pkg/util/sets"
 )
@@ -213,7 +213,7 @@ func (p *NamePrinter) PrintObj(obj runtime.Object, w io.Writer) error {
 				if err != nil {
 					return err
 				}
-				tpmeta := api.TypeMeta{
+				tpmeta := unversioned.TypeMeta{
 					APIVersion: version,
 					Kind:       kind,
 				}
@@ -517,7 +517,7 @@ func shortHumanDuration(d time.Duration) string {
 
 // translateTimestamp returns the elapsed time since timestamp in
 // human-readable approximation.
-func translateTimestamp(timestamp util.Time) string {
+func translateTimestamp(timestamp unversioned.Time) string {
 	if timestamp.IsZero() {
 		return "<unknown>"
 	}
@@ -1284,8 +1284,8 @@ func printHorizontalPodAutoscaler(hpa *experimental.HorizontalPodAutoscaler, w i
 	if hpa.Status != nil && hpa.Status.CurrentConsumption != nil {
 		current = fmt.Sprintf("%s %v", hpa.Status.CurrentConsumption.Quantity.String(), hpa.Status.CurrentConsumption.Resource)
 	}
-	minPods := hpa.Spec.MinCount
-	maxPods := hpa.Spec.MaxCount
+	minPods := hpa.Spec.MinReplicas
+	maxPods := hpa.Spec.MaxReplicas
 	if withNamespace {
 		if _, err := fmt.Fprintf(w, "%s\t", namespace); err != nil {
 			return err

@@ -33,7 +33,6 @@ type FakeRuntime struct {
 	sync.Mutex
 	CalledFunctions   []string
 	PodList           []*Pod
-	ContainerList     []*Container
 	ImageList         []Image
 	PodStatus         api.PodStatus
 	StartedPods       []string
@@ -88,7 +87,6 @@ func (f *FakeRuntime) ClearCalls() {
 
 	f.CalledFunctions = []string{}
 	f.PodList = []*Pod{}
-	f.ContainerList = []*Container{}
 	f.PodStatus = api.PodStatus{}
 	f.StartedPods = []string{}
 	f.KilledPods = []string{}
@@ -219,14 +217,6 @@ func (f *FakeRuntime) GetPodStatus(*api.Pod) (*api.PodStatus, error) {
 	return &status, f.Err
 }
 
-func (f *FakeRuntime) GetContainers(all bool) ([]*Container, error) {
-	f.Lock()
-	defer f.Unlock()
-
-	f.CalledFunctions = append(f.CalledFunctions, "GetContainers")
-	return f.ContainerList, f.Err
-}
-
 func (f *FakeRuntime) ExecInContainer(containerID string, cmd []string, stdin io.Reader, stdout, stderr io.WriteCloser, tty bool) error {
 	f.Lock()
 	defer f.Unlock()
@@ -251,7 +241,7 @@ func (f *FakeRuntime) RunInContainer(containerID string, cmd []string) ([]byte, 
 	return []byte{}, f.Err
 }
 
-func (f *FakeRuntime) GetContainerLogs(pod *api.Pod, containerID, tail string, follow bool, stdout, stderr io.Writer) (err error) {
+func (f *FakeRuntime) GetContainerLogs(pod *api.Pod, containerID string, logOptions *api.PodLogOptions, stdout, stderr io.Writer) (err error) {
 	f.Lock()
 	defer f.Unlock()
 

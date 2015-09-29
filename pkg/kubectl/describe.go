@@ -69,7 +69,6 @@ func describerMap(c *client.Client) map[string]Describer {
 	m := map[string]Describer{
 		"Pod": &PodDescriber{c},
 		"ReplicationController": &ReplicationControllerDescriber{c},
-		"DaemonSet":             &DaemonSetDescriber{c},
 		"Secret":                &SecretDescriber{c},
 		"Service":               &ServiceDescriber{c},
 		"ServiceAccount":        &ServiceAccountDescriber{c},
@@ -87,7 +86,8 @@ func describerMap(c *client.Client) map[string]Describer {
 func expDescriberMap(c *client.Client) map[string]Describer {
 	return map[string]Describer{
 		"HorizontalPodAutoscaler": &HorizontalPodAutoscalerDescriber{c},
-		"Job": &JobDescriber{c},
+		"DaemonSet":               &DaemonSetDescriber{c},
+		"Job":                     &JobDescriber{c},
 	}
 }
 
@@ -109,7 +109,7 @@ func DescriberFor(group string, kind string, c *client.Client) (Describer, bool)
 	var ok bool
 
 	switch group {
-	case "api":
+	case "":
 		f, ok = describerMap(c)[kind]
 	case "experimental":
 		f, ok = expDescriberMap(c)[kind]
@@ -471,7 +471,7 @@ func describePod(pod *api.Pod, rcs []api.ReplicationController, events *api.Even
 		fmt.Fprintf(out, "Labels:\t%s\n", labels.FormatLabels(pod.Labels))
 		if pod.DeletionTimestamp != nil {
 			fmt.Fprintf(out, "Status:\tTerminating (expires %s)\n", pod.DeletionTimestamp.Time.Format(time.RFC1123Z))
-			fmt.Fprintf(out, "Termination Grace Period:\t%ds\n", pod.DeletionGracePeriodSeconds)
+			fmt.Fprintf(out, "Termination Grace Period:\t%ds\n", *pod.DeletionGracePeriodSeconds)
 		} else {
 			fmt.Fprintf(out, "Status:\t%s\n", string(pod.Status.Phase))
 		}
@@ -884,8 +884,8 @@ func describeJob(job *experimental.Job, events *api.EventList) (string, error) {
 			fmt.Fprintf(out, "Image(s):\t%s\n", "<no template>")
 		}
 		fmt.Fprintf(out, "Selector:\t%s\n", labels.FormatLabels(job.Spec.Selector))
-		fmt.Fprintf(out, "Parallelism:\t%d\n", job.Spec.Parallelism)
-		fmt.Fprintf(out, "Completions:\t%d\n", job.Spec.Completions)
+		fmt.Fprintf(out, "Parallelism:\t%d\n", *job.Spec.Parallelism)
+		fmt.Fprintf(out, "Completions:\t%d\n", *job.Spec.Completions)
 		fmt.Fprintf(out, "Labels:\t%s\n", labels.FormatLabels(job.Labels))
 		fmt.Fprintf(out, "Pods Statuses:\t%d Running / %d Succeeded / %d Failed\n", job.Status.Active, job.Status.Successful, job.Status.Unsuccessful)
 		if job.Spec.Template != nil {
@@ -1261,8 +1261,8 @@ func (d *HorizontalPodAutoscalerDescriber) Describe(namespace, name string) (str
 		} else {
 			fmt.Fprintf(out, "<not available>\n")
 		}
-		fmt.Fprintf(out, "Min pods:\t%d\n", hpa.Spec.MinCount)
-		fmt.Fprintf(out, "Max pods:\t%d\n", hpa.Spec.MaxCount)
+		fmt.Fprintf(out, "Min pods:\t%d\n", hpa.Spec.MinReplicas)
+		fmt.Fprintf(out, "Max pods:\t%d\n", hpa.Spec.MaxReplicas)
 
 		// TODO: switch to scale subresource once the required code is submitted.
 		if strings.ToLower(hpa.Spec.ScaleRef.Kind) == "replicationcontroller" {

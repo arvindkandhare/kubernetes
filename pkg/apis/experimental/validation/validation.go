@@ -40,11 +40,11 @@ func ValidateHorizontalPodAutoscalerName(name string, prefix bool) (bool, string
 
 func validateHorizontalPodAutoscalerSpec(autoscaler experimental.HorizontalPodAutoscalerSpec) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
-	if autoscaler.MinCount < 0 {
-		allErrs = append(allErrs, errs.NewFieldInvalid("minCount", autoscaler.MinCount, `must be non-negative`))
+	if autoscaler.MinReplicas < 0 {
+		allErrs = append(allErrs, errs.NewFieldInvalid("minReplicas", autoscaler.MinReplicas, `must be non-negative`))
 	}
-	if autoscaler.MaxCount < autoscaler.MinCount {
-		allErrs = append(allErrs, errs.NewFieldInvalid("maxCount", autoscaler.MaxCount, `must be bigger or equal to minCount`))
+	if autoscaler.MaxReplicas < autoscaler.MinReplicas {
+		allErrs = append(allErrs, errs.NewFieldInvalid("maxReplicas", autoscaler.MaxReplicas, `must be bigger or equal to minReplicas`))
 	}
 	if autoscaler.ScaleRef == nil {
 		allErrs = append(allErrs, errs.NewFieldRequired("scaleRef"))
@@ -111,6 +111,23 @@ func ValidateDaemonSetUpdate(oldController, controller *experimental.DaemonSet) 
 	allErrs = append(allErrs, apivalidation.ValidateObjectMetaUpdate(&controller.ObjectMeta, &oldController.ObjectMeta).Prefix("metadata")...)
 	allErrs = append(allErrs, ValidateDaemonSetSpec(&controller.Spec).Prefix("spec")...)
 	allErrs = append(allErrs, ValidateDaemonSetTemplateUpdate(oldController.Spec.Template, controller.Spec.Template).Prefix("spec.template")...)
+	return allErrs
+}
+
+// validateDaemonSetStatus validates a DaemonSetStatus
+func validateDaemonSetStatus(status *experimental.DaemonSetStatus) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.CurrentNumberScheduled), "currentNumberScheduled")...)
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.NumberMisscheduled), "numberMisscheduled")...)
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.DesiredNumberScheduled), "desiredNumberScheduled")...)
+	return allErrs
+}
+
+// ValidateDaemonSetStatus validates tests if required fields in the DaemonSet Status section
+func ValidateDaemonSetStatusUpdate(controller, oldController *experimental.DaemonSet) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, apivalidation.ValidateObjectMetaUpdate(&controller.ObjectMeta, &oldController.ObjectMeta).Prefix("metadata")...)
+	allErrs = append(allErrs, validateDaemonSetStatus(&controller.Status)...)
 	return allErrs
 }
 
@@ -227,9 +244,9 @@ func ValidateDeploymentStrategy(strategy *experimental.DeploymentStrategy, field
 		return allErrs
 	}
 	switch strategy.Type {
-	case experimental.DeploymentRecreate:
-		allErrs = append(allErrs, errs.NewFieldForbidden("rollingUpdate", "rollingUpdate should be nil when strategy type is "+experimental.DeploymentRecreate))
-	case experimental.DeploymentRollingUpdate:
+	case experimental.RecreateDeploymentStrategyType:
+		allErrs = append(allErrs, errs.NewFieldForbidden("rollingUpdate", "rollingUpdate should be nil when strategy type is "+experimental.RecreateDeploymentStrategyType))
+	case experimental.RollingUpdateDeploymentStrategyType:
 		allErrs = append(allErrs, ValidateRollingUpdateDeployment(strategy.RollingUpdate, "rollingUpdate")...)
 	}
 	return allErrs
@@ -312,9 +329,45 @@ func ValidateJobSpec(spec *experimental.JobSpec) errs.ValidationErrorList {
 	return allErrs
 }
 
+func ValidateJobStatus(status *experimental.JobStatus) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.Active), "active")...)
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.Successful), "successful")...)
+	allErrs = append(allErrs, apivalidation.ValidatePositiveField(int64(status.Unsuccessful), "unsuccessful")...)
+	return allErrs
+}
+
 func ValidateJobUpdate(oldJob, job *experimental.Job) errs.ValidationErrorList {
 	allErrs := errs.ValidationErrorList{}
 	allErrs = append(allErrs, apivalidation.ValidateObjectMetaUpdate(&oldJob.ObjectMeta, &job.ObjectMeta).Prefix("metadata")...)
-	allErrs = append(allErrs, ValidateJobSpec(&job.Spec).Prefix("spec")...)
+	allErrs = append(allErrs, ValidateJobSpecUpdate(oldJob.Spec, job.Spec).Prefix("spec")...)
+	return allErrs
+}
+
+func ValidateJobUpdateStatus(oldJob, job *experimental.Job) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, apivalidation.ValidateObjectMetaUpdate(&oldJob.ObjectMeta, &job.ObjectMeta).Prefix("metadata")...)
+	allErrs = append(allErrs, ValidateJobStatusUpdate(oldJob.Status, job.Status).Prefix("status")...)
+	return allErrs
+}
+
+func ValidateJobSpecUpdate(oldSpec, spec experimental.JobSpec) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, ValidateJobSpec(&spec)...)
+	if !api.Semantic.DeepEqual(oldSpec.Completions, spec.Completions) {
+		allErrs = append(allErrs, errs.NewFieldInvalid("completions", spec.Completions, "field is immutable"))
+	}
+	if !api.Semantic.DeepEqual(oldSpec.Selector, spec.Selector) {
+		allErrs = append(allErrs, errs.NewFieldInvalid("selector", spec.Selector, "field is immutable"))
+	}
+	if !api.Semantic.DeepEqual(oldSpec.Template, spec.Template) {
+		allErrs = append(allErrs, errs.NewFieldInvalid("template", "[omitted]", "field is immutable"))
+	}
+	return allErrs
+}
+
+func ValidateJobStatusUpdate(oldStatus, status experimental.JobStatus) errs.ValidationErrorList {
+	allErrs := errs.ValidationErrorList{}
+	allErrs = append(allErrs, ValidateJobStatus(&status)...)
 	return allErrs
 }
