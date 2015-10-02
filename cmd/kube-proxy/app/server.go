@@ -72,7 +72,7 @@ type ProxyServer struct {
 	EndpointsConfig  *proxyconfig.EndpointsConfig
 	EndpointsHandler proxyconfig.EndpointsConfigHandler
 	IptInterface     utiliptables.Interface
-	OomAdjuster      *oom.OomAdjuster
+	OOMAdjuster      *oom.OOMAdjuster
 	Proxier          proxy.ProxyProvider
 	Recorder         record.EventRecorder
 	ServiceConfig    *proxyconfig.ServiceConfig
@@ -90,7 +90,7 @@ func (s *ProxyServerConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.Var(&s.PortRange, "proxy-port-range", "Range of host ports (beginPort-endPort, inclusive) that may be consumed in order to proxy service traffic. If unspecified (0-0) then ports will be randomly chosen.")
 	fs.StringVar(&s.HostnameOverride, "hostname-override", s.HostnameOverride, "If non-empty, will use this string as identification instead of the actual hostname.")
 	fs.StringVar(&s.ProxyMode, "proxy-mode", "", "Which proxy mode to use: 'userspace' (older, stable) or 'iptables' (experimental). If blank, look at the Node object on the Kubernetes API and respect the '"+experimentalProxyModeAnnotation+"' annotation if provided.  Otherwise use the best-available proxy (currently userspace, but may change in future versions).  If the iptables proxy is selected, regardless of how, but the system's kernel or iptables versions are insufficient, this always falls back to the userspace proxy.")
-	fs.DurationVar(&s.SyncPeriod, "iptables-sync-period", 5*time.Second, "How often iptables rules are refreshed (e.g. '5s', '1m', '2h22m').  Must be greater than 0.")
+	fs.DurationVar(&s.SyncPeriod, "iptables-sync-period", s.SyncPeriod, "How often iptables rules are refreshed (e.g. '5s', '1m', '2h22m').  Must be greater than 0.")
 	fs.BoolVar(&s.MasqueradeAll, "masquerade-all", false, "If using the pure iptables proxy, SNAT everything")
 	fs.BoolVar(&s.CleanupAndExit, "cleanup-iptables", false, "If true cleanup iptables rules and exit.")
 }
@@ -114,9 +114,9 @@ func NewProxyConfig() *ProxyServerConfig {
 		BindAddress:        net.ParseIP("0.0.0.0"),
 		HealthzPort:        10249,
 		HealthzBindAddress: net.ParseIP("127.0.0.1"),
-		OOMScoreAdj:        qos.KubeProxyOomScoreAdj,
+		OOMScoreAdj:        qos.KubeProxyOOMScoreAdj,
 		ResourceContainer:  "/kube-proxy",
-		SyncPeriod:         5 * time.Second,
+		SyncPeriod:         30 * time.Second,
 	}
 }
 
@@ -126,7 +126,7 @@ func NewProxyServer(
 	endpointsConfig *proxyconfig.EndpointsConfig,
 	endpointsHandler proxyconfig.EndpointsConfigHandler,
 	iptInterface utiliptables.Interface,
-	oomAdjuster *oom.OomAdjuster,
+	oomAdjuster *oom.OOMAdjuster,
 	proxier proxy.ProxyProvider,
 	recorder record.EventRecorder,
 	serviceConfig *proxyconfig.ServiceConfig,
@@ -137,7 +137,7 @@ func NewProxyServer(
 		EndpointsConfig:  endpointsConfig,
 		EndpointsHandler: endpointsHandler,
 		IptInterface:     iptInterface,
-		OomAdjuster:      oomAdjuster,
+		OOMAdjuster:      oomAdjuster,
 		Proxier:          proxier,
 		Recorder:         recorder,
 		ServiceConfig:    serviceConfig,
@@ -151,21 +151,23 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 		protocol = utiliptables.ProtocolIpv6
 	}
 
+	// Create a iptables utils.
+	execer := exec.New()
+	dbus := utildbus.New()
+	iptInterface := utiliptables.New(execer, dbus, protocol)
+
 	// We ommit creation of pretty much everything if we run in cleanup mode
 	if config.CleanupAndExit {
-		execer := exec.New()
-		dbus := utildbus.New()
-		IptInterface := utiliptables.New(execer, dbus, protocol)
 		return &ProxyServer{
-			IptInterface: IptInterface,
+			IptInterface: iptInterface,
 		}, nil
 	}
 
 	// TODO(vmarmol): Use container config for this.
-	var oomAdjuster *oom.OomAdjuster
+	var oomAdjuster *oom.OOMAdjuster
 	if config.OOMScoreAdj != 0 {
-		oomAdjuster := oom.NewOomAdjuster()
-		if err := oomAdjuster.ApplyOomScoreAdj(0, config.OOMScoreAdj); err != nil {
+		oomAdjuster = oom.NewOOMAdjuster()
+		if err := oomAdjuster.ApplyOOMScoreAdj(0, config.OOMScoreAdj); err != nil {
 			glog.V(2).Info(err)
 		}
 	}
@@ -203,11 +205,6 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 	recorder := eventBroadcaster.NewRecorder(api.EventSource{Component: "kube-proxy", Host: hostname})
 	eventBroadcaster.StartRecordingToSink(client.Events(""))
 
-	// Create a iptables utils.
-	execer := exec.New()
-	dbus := utildbus.New()
-	iptInterface := utiliptables.New(execer, dbus, protocol)
-
 	var proxier proxy.ProxyProvider
 	var endpointsHandler proxyconfig.EndpointsConfigHandler
 
@@ -223,7 +220,6 @@ func NewProxyServerDefault(config *ProxyServerConfig) (*ProxyServer, error) {
 
 	if useIptablesProxy {
 		glog.V(2).Info("Using iptables Proxier.")
-		execer := exec.New()
 		proxierIptables, err := iptables.NewProxier(iptInterface, execer, config.SyncPeriod, config.MasqueradeAll)
 		if err != nil {
 			glog.Fatalf("Unable to create proxier: %v", err)

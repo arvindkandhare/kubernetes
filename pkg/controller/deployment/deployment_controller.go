@@ -18,16 +18,17 @@ package deployment
 
 import (
 	"fmt"
-	"hash/adler32"
 	"math"
 	"time"
 
+	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/apis/experimental"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/util"
+	deploymentUtil "k8s.io/kubernetes/pkg/util/deployment"
 )
 
 type DeploymentController struct {
@@ -44,22 +45,25 @@ func New(client client.Interface) *DeploymentController {
 
 func (d *DeploymentController) Run(syncPeriod time.Duration) {
 	go util.Until(func() {
-		if err := d.reconcileDeployments(); err != nil {
+		errs := d.reconcileDeployments()
+		for _, err := range errs {
+			glog.Errorf("Failed to reconcile: %v", err)
 		}
 	}, syncPeriod, util.NeverStop)
 }
 
-func (d *DeploymentController) reconcileDeployments() error {
+func (d *DeploymentController) reconcileDeployments() []error {
 	list, err := d.expClient.Deployments(api.NamespaceAll).List(labels.Everything(), fields.Everything())
 	if err != nil {
-		return fmt.Errorf("error listing deployments: %v", err)
+		return []error{fmt.Errorf("error listing deployments: %v", err)}
 	}
+	errs := []error{}
 	for _, deployment := range list.Items {
 		if err := d.reconcileDeployment(&deployment); err != nil {
-			return fmt.Errorf("error in reconciling deployment: %v", err)
+			errs = append(errs, fmt.Errorf("error in reconciling deployment %s: %v", deployment.Name, err))
 		}
 	}
-	return nil
+	return errs
 }
 
 func (d *DeploymentController) reconcileDeployment(deployment *experimental.Deployment) error {
@@ -69,7 +73,7 @@ func (d *DeploymentController) reconcileDeployment(deployment *experimental.Depl
 	case experimental.RollingUpdateDeploymentStrategyType:
 		return d.reconcileRollingUpdateDeployment(*deployment)
 	}
-	return fmt.Errorf("Unexpected deployment strategy type: %s", deployment.Spec.Strategy.Type)
+	return fmt.Errorf("unexpected deployment strategy type: %s", deployment.Spec.Strategy.Type)
 }
 
 func (d *DeploymentController) reconcileRecreateDeployment(deployment experimental.Deployment) error {
@@ -116,59 +120,21 @@ func (d *DeploymentController) reconcileRollingUpdateDeployment(deployment exper
 }
 
 func (d *DeploymentController) getOldRCs(deployment experimental.Deployment) ([]*api.ReplicationController, error) {
-	namespace := deployment.ObjectMeta.Namespace
-	// 1. Find all pods whose labels match deployment.Spec.Selector
-	podList, err := d.client.Pods(namespace).List(labels.SelectorFromSet(deployment.Spec.Selector), fields.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("error listing pods: %v", err)
-	}
-	// 2. Find the corresponding RCs for pods in podList.
-	// TODO: Right now we list all RCs and then filter. We should add an API for this.
-	oldRCs := map[string]api.ReplicationController{}
-	rcList, err := d.client.ReplicationControllers(namespace).List(labels.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("error listing replication controllers: %v", err)
-	}
-	for _, pod := range podList.Items {
-		podLabelsSelector := labels.Set(pod.ObjectMeta.Labels)
-		for _, rc := range rcList.Items {
-			rcLabelsSelector := labels.SelectorFromSet(rc.Spec.Selector)
-			if rcLabelsSelector.Matches(podLabelsSelector) {
-				// Filter out RC that has the same pod template spec as the deployment - that is the new RC.
-				if api.Semantic.DeepEqual(rc.Spec.Template, getNewRCTemplate(deployment)) {
-					continue
-				}
-				oldRCs[rc.ObjectMeta.Name] = rc
-			}
-		}
-	}
-	requiredRCs := []*api.ReplicationController{}
-	for _, value := range oldRCs {
-		requiredRCs = append(requiredRCs, &value)
-	}
-	return requiredRCs, nil
+	return deploymentUtil.GetOldRCs(deployment, d.client)
 }
 
 // Returns an RC that matches the intent of the given deployment.
 // It creates a new RC if required.
 func (d *DeploymentController) getNewRC(deployment experimental.Deployment) (*api.ReplicationController, error) {
-	namespace := deployment.ObjectMeta.Namespace
-	// Find if the required RC exists already.
-	rcList, err := d.client.ReplicationControllers(namespace).List(labels.Everything())
-	if err != nil {
-		return nil, fmt.Errorf("error listing replication controllers: %v", err)
-	}
-	newRCTemplate := getNewRCTemplate(deployment)
-
-	for _, rc := range rcList.Items {
-		if api.Semantic.DeepEqual(rc.Spec.Template, newRCTemplate) {
-			// This is the new RC.
-			return &rc, nil
-		}
+	existingNewRC, err := deploymentUtil.GetNewRC(deployment, d.client)
+	if err != nil || existingNewRC != nil {
+		return existingNewRC, err
 	}
 	// new RC does not exist, create one.
-	podTemplateSpecHash := getPodTemplateSpecHash(deployment.Spec.Template)
+	namespace := deployment.ObjectMeta.Namespace
+	podTemplateSpecHash := deploymentUtil.GetPodTemplateSpecHash(deployment.Spec.Template)
 	rcName := fmt.Sprintf("deploymentrc-%d", podTemplateSpecHash)
+	newRCTemplate := deploymentUtil.GetNewRCTemplate(deployment)
 	newRC := api.ReplicationController{
 		ObjectMeta: api.ObjectMeta{
 			Name:      rcName,
@@ -185,30 +151,6 @@ func (d *DeploymentController) getNewRC(deployment experimental.Deployment) (*ap
 		return nil, fmt.Errorf("error creating replication controller: %v", err)
 	}
 	return createdRC, nil
-}
-
-func getNewRCTemplate(deployment experimental.Deployment) *api.PodTemplateSpec {
-	// newRC will have the same template as in deployment spec, plus a unique label in some cases.
-	newRCTemplate := &api.PodTemplateSpec{
-		ObjectMeta: deployment.Spec.Template.ObjectMeta,
-		Spec:       deployment.Spec.Template.Spec,
-	}
-	podTemplateSpecHash := getPodTemplateSpecHash(newRCTemplate)
-	if deployment.Spec.UniqueLabelKey != "" {
-		newLabels := map[string]string{}
-		for key, value := range deployment.Spec.Template.ObjectMeta.Labels {
-			newLabels[key] = value
-		}
-		newLabels[deployment.Spec.UniqueLabelKey] = fmt.Sprintf("%d", podTemplateSpecHash)
-		newRCTemplate.ObjectMeta.Labels = newLabels
-	}
-	return newRCTemplate
-}
-
-func getPodTemplateSpecHash(template *api.PodTemplateSpec) uint32 {
-	podTemplateSpecHasher := adler32.New()
-	util.DeepHashObject(podTemplateSpecHasher, template)
-	return podTemplateSpecHasher.Sum32()
 }
 
 func (d *DeploymentController) getPodsForRCs(replicationControllers []*api.ReplicationController) ([]api.Pod, error) {
@@ -238,7 +180,7 @@ func (d *DeploymentController) scaleUp(allRCs []*api.ReplicationController, newR
 	}
 	maxSurge, isPercent, err := util.GetIntOrPercentValue(&deployment.Spec.Strategy.RollingUpdate.MaxSurge)
 	if err != nil {
-		return false, fmt.Errorf("Invalid value for MaxSurge: %v", err)
+		return false, fmt.Errorf("invalid value for MaxSurge: %v", err)
 	}
 	if isPercent {
 		maxSurge = util.GetValueFromPercent(maxSurge, deployment.Spec.Replicas)
@@ -270,7 +212,7 @@ func (d *DeploymentController) scaleDown(allRCs []*api.ReplicationController, ol
 	}
 	maxUnavailable, isPercent, err := util.GetIntOrPercentValue(&deployment.Spec.Strategy.RollingUpdate.MaxUnavailable)
 	if err != nil {
-		return false, fmt.Errorf("Invalid value for MaxUnavailable: %v", err)
+		return false, fmt.Errorf("invalid value for MaxUnavailable: %v", err)
 	}
 	if isPercent {
 		maxUnavailable = util.GetValueFromPercent(maxUnavailable, deployment.Spec.Replicas)
