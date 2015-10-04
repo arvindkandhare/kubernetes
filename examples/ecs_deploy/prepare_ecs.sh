@@ -45,15 +45,20 @@ echo "DONE SETTING UP first round!!"
 
 
 ### 2. bring up ECS with some junk config ...
+
+
+done=0
 kubectl.sh create -f examples/ecs_deploy/ecs-controller.yaml 
 kubectl.sh create -f examples/ecs_deploy/ecs-service.yaml 
 
 echo "Sleeping for 5 mins"
 
-sleep 120
+sleep 300
+
 
 #should actually loop till the pods are stable
-kubectl.sh get pods
+running=`kubectl.sh get pods | grep ecs | grep -i "running" | wc -l`
+echo $running
 
 
 ### 3. Get the actual IP addresses of the containers

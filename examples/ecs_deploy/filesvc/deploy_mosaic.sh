@@ -12,6 +12,6 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
  gcloud compute ssh $hostname "sudo cp /tmp/passwd_file /data; sudo chmod 400 /data/passwd_file" --zone $zonename
 done
 
-kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicme-controller.yaml --validate=false
-kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicme-service.yaml
+kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-service.yaml
+kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-controller.yaml --validate=false
 

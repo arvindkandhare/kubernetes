@@ -38,10 +38,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: 5KmpDHAE3B5BbtrAKvZTQxwvJ7HjkYzsllPPiYFv
+                value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
           
               - name:  S3_HOST
-                value: 104.197.143.233
+                value: 104.197.101.236
           
               - name: S3_PORT
                 value: "9020"
@@ -134,10 +134,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: 5KmpDHAE3B5BbtrAKvZTQxwvJ7HjkYzsllPPiYFv
+                 value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
            
                - name:  S3_HOST
-                 value: 104.197.143.233
+                 value: 104.197.101.236
            
                - name: S3_PORT
                  value: "9020"
@@ -214,10 +214,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: 5KmpDHAE3B5BbtrAKvZTQxwvJ7HjkYzsllPPiYFv
+                value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
           
               - name:  S3_HOST
-                value: 104.197.143.233
+                value: 104.197.101.236
           
               - name: S3_PORT
                 value: "9020"
@@ -287,7 +287,7 @@ spec:
           image:   arvindkandhare/mosaicme-collector
           env:
                   - name:   MOSAIC_LISTEN_HASHTAG
-                    value:  ModiAtSAPCenter
+                    value:  AFLGF
  
                   - name:   MOSAIC_BUCKET
                     value:  mosaic-in
@@ -315,10 +315,10 @@ spec:
                     value: emccode
                
                   - name:  S3_SECRET_KEY
-                    value: 5KmpDHAE3B5BbtrAKvZTQxwvJ7HjkYzsllPPiYFv
+                    value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
                
                   - name:  S3_HOST
-                    value: 104.197.143.233
+                    value: 104.197.101.236
                
                   - name: S3_PORT
                     value: "9020"
@@ -379,7 +379,7 @@ spec:
                    value:  localhost
 
         - name:    mosaicmecacher1
-          image:   emccode/mosaicme-cacher
+          image:   arvindkandhare/mosaicme-cacher
           env:
                - name:   TWITTER_CONSUMER_KEY
                  value:  4oxzHFJ7PXsAA7hAeLk6qzEgj
@@ -402,10 +402,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: 5KmpDHAE3B5BbtrAKvZTQxwvJ7HjkYzsllPPiYFv
+                 value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
            
                - name:  S3_HOST
-                 value: 104.197.143.233
+                 value: 104.197.101.236
            
                - name: S3_PORT
                  value: "9020"
