@@ -178,7 +178,8 @@ func NewMainKubelet(
 	dockerExecHandler dockertools.ExecHandler,
 	resolverConfig string,
 	cpuCFSQuota bool,
-	daemonEndpoints *api.NodeDaemonEndpoints) (*Kubelet, error) {
+	daemonEndpoints *api.NodeDaemonEndpoints,
+	oomAdjuster *oom.OOMAdjuster) (*Kubelet, error) {
 	if rootDirectory == "" {
 		return nil, fmt.Errorf("invalid root directory %q", rootDirectory)
 	}
@@ -307,7 +308,6 @@ func NewMainKubelet(
 		return nil, err
 	}
 
-	oomAdjuster := oom.NewOOMAdjuster()
 	procFs := procfs.NewProcFs()
 
 	// Initialize the runtime.
@@ -1304,9 +1304,6 @@ func (kl *Kubelet) syncPod(pod *api.Pod, mirrorPod *api.Pod, runningPod kubecont
 	// status. Any race conditions here effectively boils down to -- the pod worker didn't sync
 	// state of a newly started container with the apiserver before the kubelet restarted, so
 	// it's OK to pretend like the kubelet started them after it restarted.
-	//
-	// Also note that deletes currently have an updateType of `create` set in UpdatePods.
-	// This, again, does not matter because deletes are not processed by this method.
 
 	var podStatus api.PodStatus
 	if updateType == SyncPodCreate {
@@ -1952,7 +1949,7 @@ func (kl *Kubelet) dispatchWork(pod *api.Pod, syncType SyncPodType, mirrorPod *a
 		return
 	}
 	// Run the sync in an async worker.
-	kl.podWorkers.UpdatePod(pod, mirrorPod, func() {
+	kl.podWorkers.UpdatePod(pod, mirrorPod, syncType, func() {
 		metrics.PodWorkerLatency.WithLabelValues(syncType.String()).Observe(metrics.SinceInMicroseconds(start))
 	})
 	// Note the number of containers for new pods.
@@ -2362,13 +2359,12 @@ func (kl *Kubelet) setNodeStatus(node *api.Node) error {
 			LastHeartbeatTime: currentTime,
 		}
 	} else {
-		var reasons []string
 		var messages []string
 		if !containerRuntimeUp {
 			messages = append(messages, "container runtime is down")
 		}
 		if !networkConfigured {
-			messages = append(reasons, "network not configured correctly")
+			messages = append(messages, "network not configured correctly")
 		}
 		newNodeReadyCondition = api.NodeCondition{
 			Type:              api.NodeReady,

@@ -36,6 +36,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/rest"
+	apiutil "k8s.io/kubernetes/pkg/api/util"
 	"k8s.io/kubernetes/pkg/api/v1"
 	expapi "k8s.io/kubernetes/pkg/apis/experimental"
 	"k8s.io/kubernetes/pkg/apiserver"
@@ -54,6 +55,7 @@ import (
 	endpointsetcd "k8s.io/kubernetes/pkg/registry/endpoint/etcd"
 	eventetcd "k8s.io/kubernetes/pkg/registry/event/etcd"
 	expcontrolleretcd "k8s.io/kubernetes/pkg/registry/experimental/controller/etcd"
+	ingressetcd "k8s.io/kubernetes/pkg/registry/ingress/etcd"
 	jobetcd "k8s.io/kubernetes/pkg/registry/job/etcd"
 	limitrangeetcd "k8s.io/kubernetes/pkg/registry/limitrange/etcd"
 	"k8s.io/kubernetes/pkg/registry/namespace"
@@ -591,8 +593,8 @@ func (m *Master) init(c *Config) {
 		}
 		expAPIVersions := []api.GroupVersion{
 			{
-				GroupVersion: g.Group + "/" + expVersion.Version,
-				Version:      expVersion.Version,
+				GroupVersion: expVersion.Version,
+				Version:      apiutil.GetVersion(expVersion.Version),
 			},
 		}
 		storageVersion, found := c.StorageVersions[g.Group]
@@ -602,7 +604,7 @@ func (m *Master) init(c *Config) {
 		group := api.APIGroup{
 			Name:             g.Group,
 			Versions:         expAPIVersions,
-			PreferredVersion: api.GroupVersion{GroupVersion: g.Group + "/" + storageVersion, Version: storageVersion},
+			PreferredVersion: api.GroupVersion{GroupVersion: storageVersion, Version: apiutil.GetVersion(storageVersion)},
 		}
 		apiserver.AddGroupWebService(m.handlerContainer, c.APIGroupPrefix+"/"+latest.GroupOrDie("experimental").Group+"/", group)
 		allGroups = append(allGroups, group)
@@ -930,7 +932,7 @@ func (m *Master) InstallThirdPartyResource(rsrc *expapi.ThirdPartyResource) erro
 func (m *Master) thirdpartyapi(group, kind, version string) *apiserver.APIGroupVersion {
 	resourceStorage := thirdpartyresourcedataetcd.NewREST(m.thirdPartyStorage, group, kind)
 
-	apiRoot := makeThirdPartyPath(group)
+	apiRoot := makeThirdPartyPath("")
 
 	storage := map[string]rest.Storage{
 		strings.ToLower(kind) + "s": resourceStorage,
@@ -938,10 +940,10 @@ func (m *Master) thirdpartyapi(group, kind, version string) *apiserver.APIGroupV
 
 	return &apiserver.APIGroupVersion{
 		Root:                   apiRoot,
-		Version:                version,
+		Version:                apiutil.GetGroupVersion(group, version),
 		APIRequestInfoResolver: m.newAPIRequestInfoResolver(),
 
-		Creater:   thirdpartyresourcedata.NewObjectCreator(version, api.Scheme),
+		Creater:   thirdpartyresourcedata.NewObjectCreator(group, version, api.Scheme),
 		Convertor: api.Scheme,
 		Typer:     api.Scheme,
 
@@ -966,6 +968,7 @@ func (m *Master) experimental(c *Config) *apiserver.APIGroupVersion {
 	daemonSetStorage, daemonSetStatusStorage := daemonetcd.NewREST(c.ExpDatabaseStorage)
 	deploymentStorage := deploymentetcd.NewStorage(c.ExpDatabaseStorage)
 	jobStorage, jobStatusStorage := jobetcd.NewREST(c.ExpDatabaseStorage)
+	ingressStorage := ingressetcd.NewREST(c.ExpDatabaseStorage)
 
 	thirdPartyControl := ThirdPartyController{
 		master: m,
@@ -989,6 +992,7 @@ func (m *Master) experimental(c *Config) *apiserver.APIGroupVersion {
 		strings.ToLower("deployments/scale"):            deploymentStorage.Scale,
 		strings.ToLower("jobs"):                         jobStorage,
 		strings.ToLower("jobs/status"):                  jobStatusStorage,
+		strings.ToLower("ingress"):                      ingressStorage,
 	}
 
 	expMeta := latest.GroupOrDie("experimental")
