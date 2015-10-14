@@ -57,7 +57,7 @@ def retry( numberOfRetries, timeToWaitBetweenTriesInSeconds, functionToRetry, ar
 
 
 def getVDCID(ECSNode,VDCName):
-    url ='/object/vdcs/vdc/%s' %VDCName
+    url ='/vdc/' %VDCName
     return executeRestAPI(url, 'GET','.id', "", ECSNode,checkOutput=1)["id"]
 
 def getVarrayID(ECSNode):

@@ -1,5 +1,6 @@
 set -v
 set -e
+PATH=$PATH:$PWD/cluster
 export NUM_MINIONS=3
 kube-up.sh
 gcloud compute instances list | grep minion | awk "{ IPS= IPS \",\" \$5;} END{ print IPS}" > /tmp/tp
@@ -128,4 +129,4 @@ chmod a+x setup.sh
 gcloud compute copy-files setup.sh $hostname:/tmp/ --zone $zonename
 gcloud compute ssh $hostname "sudo cp -f /tmp/setup.sh /host/files/" --zone $zonename
  
-gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename
+#gcloud compute ssh $hostname "sudo /tmp/setup.sh" --zone $zonename

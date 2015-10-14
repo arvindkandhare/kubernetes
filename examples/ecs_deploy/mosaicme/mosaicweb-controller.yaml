@@ -38,10 +38,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
+                value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
           
               - name:  S3_HOST
-                value: 104.197.101.236
+                value: 104.197.81.157
           
               - name: S3_PORT
                 value: "9020"
@@ -134,10 +134,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
+                 value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
            
                - name:  S3_HOST
-                 value: 104.197.101.236
+                 value: 104.197.81.157
            
                - name: S3_PORT
                  value: "9020"
@@ -214,10 +214,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
+                value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
           
               - name:  S3_HOST
-                value: 104.197.101.236
+                value: 104.197.176.133
           
               - name: S3_PORT
                 value: "9020"
@@ -287,7 +287,7 @@ spec:
           image:   arvindkandhare/mosaicme-collector
           env:
                   - name:   MOSAIC_LISTEN_HASHTAG
-                    value:  AFLGF
+                    value:  NationalComingOutDay
  
                   - name:   MOSAIC_BUCKET
                     value:  mosaic-in
@@ -315,10 +315,10 @@ spec:
                     value: emccode
                
                   - name:  S3_SECRET_KEY
-                    value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
+                    value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
                
                   - name:  S3_HOST
-                    value: 104.197.101.236
+                    value: 104.197.81.157
                
                   - name: S3_PORT
                     value: "9020"
@@ -402,10 +402,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: LJNyP2Jjd7ameoTlFZIJaNjX5qETPDblVHdCYNhh
+                 value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
            
                - name:  S3_HOST
-                 value: 104.197.101.236
+                 value: 104.197.176.133
            
                - name: S3_PORT
                  value: "9020"

@@ -9,7 +9,7 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
 
  gcloud compute ssh $hostname "sudo rm -rf /data/passwd_file" --zone $zonename
  gcloud compute copy-files ./examples/ecs_deploy/filesvc/passwd_file $hostname:/tmp/ --zone $zonename
- gcloud compute ssh $hostname "sudo cp /tmp/passwd_file /data; sudo chmod 400 /data/passwd_file" --zone $zonename
+ gcloud compute ssh $hostname "sudo mkdir -p /data;sudo cp /tmp/passwd_file /data; sudo chmod 400 /data/passwd_file" --zone $zonename
 done
 
 kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-service.yaml

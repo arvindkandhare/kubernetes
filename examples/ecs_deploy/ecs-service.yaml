@@ -34,6 +34,9 @@ spec:
   - port: 8020
     name: filsvcdbg
 
+  - port: 8192
+    name: provisiondbg
+
   - port: 9899
     name: fileprovision
 
