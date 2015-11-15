@@ -31,8 +31,8 @@ import (
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/storage"
 	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
+	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 	"k8s.io/kubernetes/pkg/tools"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
 )
 
 func NewEtcdStorage(t *testing.T, group string) (storage.Interface, *tools.FakeEtcdClient) {
@@ -163,8 +163,8 @@ func getCodec(obj runtime.Object) (runtime.Codec, error) {
 	var codec runtime.Codec
 	if api.Scheme.Recognizes(testapi.Default.GroupAndVersion(), kind) {
 		codec = testapi.Default.Codec()
-	} else if api.Scheme.Recognizes(testapi.Experimental.GroupAndVersion(), kind) {
-		codec = testapi.Experimental.Codec()
+	} else if api.Scheme.Recognizes(testapi.Extensions.GroupAndVersion(), kind) {
+		codec = testapi.Extensions.Codec()
 	} else {
 		return nil, fmt.Errorf("unexpected kind: %v", kind)
 	}

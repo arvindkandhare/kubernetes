@@ -20,7 +20,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
@@ -45,59 +44,14 @@ const (
 	versionURLFmt = "https://storage.googleapis.com/kubernetes-release/%s/%s.txt"
 )
 
-// realVersion turns a version constant s--one accepted by cluster/gce/upgrade.sh--
-// into a deployable version string. If the s is not known to be a version
-// constant, it will assume it is already a valid version, and return s directly.
-//
-// NOTE: KEEP THIS LIST UP-TO-DATE WITH THE CODE BELOW.
-// The version strings supported are:
-// - "latest_stable"   (returns a string like "0.18.2")
-// - "latest_release"  (returns a string like "0.19.1")
-// - "latest_ci"       (returns a string like "0.19.1-669-gabac8c8")
+// realVersion turns a version constant s into a version string deployable on
+// GKE.  See hack/get-build.sh for more information.
 func realVersion(s string) (string, error) {
-	bucket, file := "", ""
-	switch s {
-	// NOTE: IF YOU CHANGE THE FOLLOWING LIST, ALSO UPDATE cluster/gce/upgrade.sh
-	case "latest_stable":
-		bucket, file = "release", "stable"
-	case "latest_release":
-		bucket, file = "release", "latest"
-	case "latest_ci":
-		bucket, file = "ci", "latest"
-	default:
-		// If we don't match one of the above, we assume that the passed version
-		// is already valid (such as "0.19.1" or "0.19.1-669-gabac8c8").
-		Logf("Assuming %q is already a valid version.", s)
-		return s, nil
+	v, _, err := runCmd(path.Join(testContext.RepoRoot, "hack/get-build.sh"), "-v", s)
+	if err != nil {
+		return v, err
 	}
-
-	url := fmt.Sprintf(versionURLFmt, bucket, file)
-	var v string
-	Logf("Fetching version from %s", url)
-	c := &http.Client{Timeout: 2 * time.Second}
-	if err := wait.Poll(poll, singleCallTimeout, func() (bool, error) {
-		r, err := c.Get(url)
-		if err != nil {
-			Logf("Error reaching %s: %v", url, err)
-			return false, nil
-		}
-		if r.StatusCode != http.StatusOK {
-			Logf("Bad response; status: %d, response: %v", r.StatusCode, r)
-			return false, nil
-		}
-		defer r.Body.Close()
-		b, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			Logf("Could not read response body: %v", err)
-			return false, nil
-		}
-		v = strings.TrimSpace(string(b))
-		return true, nil
-	}); err != nil {
-		return "", fmt.Errorf("failed to fetch real version from %s", url)
-	}
-	// Versions start with "v", so remove that.
-	return strings.TrimPrefix(v, "v"), nil
+	return strings.TrimPrefix(strings.TrimSpace(v), "v"), nil
 }
 
 // The following upgrade functions are passed into the framework below and used
@@ -138,7 +92,7 @@ var masterPush = func(_ string) error {
 	return err
 }
 
-var nodeUpgrade = func(f Framework, replicas int, v string) error {
+var nodeUpgrade = func(f *Framework, replicas int, v string) error {
 	// Perform the upgrade.
 	var err error
 	switch testContext.Provider {
@@ -196,8 +150,6 @@ var _ = Describe("Skipped", func() {
 		svcName, replicas := "baz", 2
 		var rcName, ip, v string
 		var ingress api.LoadBalancerIngress
-		f := Framework{BaseName: "cluster-upgrade"}
-		var w *WebserverTest
 
 		BeforeEach(func() {
 			// The version is determined once at the beginning of the test so that
@@ -207,10 +159,13 @@ var _ = Describe("Skipped", func() {
 			var err error
 			v, err = realVersion(testContext.UpgradeTarget)
 			expectNoError(err)
-			Logf("Version for %q is %s", testContext.UpgradeTarget, v)
+			Logf("Version for %q is %q", testContext.UpgradeTarget, v)
+		})
 
+		f := NewFramework("cluster-upgrade")
+		var w *WebserverTest
+		BeforeEach(func() {
 			By("Setting up the service, RC, and pods")
-			f.beforeEach()
 			w = NewWebserverTest(f.Client, f.Namespace.Name, svcName)
 			rc := w.CreateWebserverRC(replicas)
 			rcName = rc.ObjectMeta.Name
@@ -238,9 +193,7 @@ var _ = Describe("Skipped", func() {
 			//  - volumes
 			//  - persistent volumes
 		})
-
 		AfterEach(func() {
-			f.afterEach()
 			w.Cleanup()
 		})
 
@@ -391,7 +344,7 @@ func checkMasterVersion(c *client.Client, want string) error {
 	return nil
 }
 
-func testNodeUpgrade(f Framework, nUp func(f Framework, n int, v string) error, replicas int, v string) {
+func testNodeUpgrade(f *Framework, nUp func(f *Framework, n int, v string) error, replicas int, v string) {
 	Logf("Starting node upgrade")
 	expectNoError(nUp(f, replicas, v))
 	Logf("Node upgrade complete")
@@ -446,7 +399,7 @@ func runCmd(command string, args ...string) (string, string, error) {
 	var bout, berr bytes.Buffer
 	cmd := exec.Command(command, args...)
 	// We also output to the OS stdout/stderr to aid in debugging in case cmd
-	// hangs and never retruns before the test gets killed.
+	// hangs and never returns before the test gets killed.
 	cmd.Stdout = io.MultiWriter(os.Stdout, &bout)
 	cmd.Stderr = io.MultiWriter(os.Stderr, &berr)
 	err := cmd.Run()
@@ -458,10 +411,10 @@ func runCmd(command string, args ...string) (string, string, error) {
 	return stdout, stderr, nil
 }
 
-func validate(f Framework, svcNameWant, rcNameWant string, ingress api.LoadBalancerIngress, podsWant int) error {
+func validate(f *Framework, svcNameWant, rcNameWant string, ingress api.LoadBalancerIngress, podsWant int) error {
 	Logf("Beginning cluster validation")
 	// Verify RC.
-	rcs, err := f.Client.ReplicationControllers(f.Namespace.Name).List(labels.Everything())
+	rcs, err := f.Client.ReplicationControllers(f.Namespace.Name).List(labels.Everything(), fields.Everything())
 	if err != nil {
 		return fmt.Errorf("error listing RCs: %v", err)
 	}
@@ -493,7 +446,7 @@ func validate(f Framework, svcNameWant, rcNameWant string, ingress api.LoadBalan
 }
 
 // migRollingUpdate starts a MIG rolling update, upgrading the nodes to a new
-// instance template named tmpl, and waits up to nt times the nubmer of nodes
+// instance template named tmpl, and waits up to nt times the number of nodes
 // for it to complete.
 func migRollingUpdate(tmpl string, nt time.Duration) error {
 	By(fmt.Sprintf("starting the MIG rolling update to %s", tmpl))
@@ -510,7 +463,7 @@ func migRollingUpdate(tmpl string, nt time.Duration) error {
 	return nil
 }
 
-// migTemlate (GCE/GKE-only) returns the name of the MIG template that the
+// migTemplate (GCE/GKE-only) returns the name of the MIG template that the
 // nodes of the cluster use.
 func migTemplate() (string, error) {
 	var errLast error
@@ -560,7 +513,7 @@ func migRollingUpdateStart(templ string, nt time.Duration) (string, error) {
 		// NOTE(mikedanese): If you are changing this gcloud command, update
 		//                 cluster/gce/upgrade.sh to match this EXACTLY.
 		// A `rolling-updates start` call outputs what we want to stderr.
-		_, output, err := retryCmd("gcloud", append(migUdpateCmdBase(),
+		_, output, err := retryCmd("gcloud", append(migUpdateCmdBase(),
 			"rolling-updates",
 			fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
 			fmt.Sprintf("--zone=%s", testContext.CloudConfig.Zone),
@@ -612,7 +565,7 @@ func migRollingUpdateStart(templ string, nt time.Duration) (string, error) {
 //
 // TODO(mikedanese): Remove this hack on July 29, 2015 when the migration to
 //                 `gcloud alpha compute rolling-updates` is complete.
-func migUdpateCmdBase() []string {
+func migUpdateCmdBase() []string {
 	b := []string{"preview"}
 	a := []string{"rolling-updates", "-h"}
 	if err := exec.Command("gcloud", append(b, a...)...).Run(); err != nil {
@@ -632,7 +585,7 @@ func migRollingUpdatePoll(id string, nt time.Duration) error {
 	Logf("Waiting up to %v for MIG rolling update to complete.", timeout)
 	if wait.Poll(restartPoll, timeout, func() (bool, error) {
 		// A `rolling-updates describe` call outputs what we want to stdout.
-		output, _, err := retryCmd("gcloud", append(migUdpateCmdBase(),
+		output, _, err := retryCmd("gcloud", append(migUpdateCmdBase(),
 			"rolling-updates",
 			fmt.Sprintf("--project=%s", testContext.CloudConfig.ProjectID),
 			fmt.Sprintf("--zone=%s", testContext.CloudConfig.Zone),

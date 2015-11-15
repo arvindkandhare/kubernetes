@@ -50,6 +50,10 @@ func (strategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.Valida
 	return validation.ValidateServiceAccount(obj.(*api.ServiceAccount))
 }
 
+// Canonicalize normalizes the object after validation.
+func (strategy) Canonicalize(obj runtime.Object) {
+}
+
 func (strategy) AllowCreateOnUpdate() bool {
 	return false
 }
@@ -65,7 +69,7 @@ func cleanSecretReferences(serviceAccount *api.ServiceAccount) {
 }
 
 func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
-	return validation.ValidateServiceAccountUpdate(old.(*api.ServiceAccount), obj.(*api.ServiceAccount))
+	return validation.ValidateServiceAccountUpdate(obj.(*api.ServiceAccount), old.(*api.ServiceAccount))
 }
 
 func (strategy) AllowUnconditionalUpdate() bool {
@@ -86,7 +90,5 @@ func Matcher(label labels.Selector, field fields.Selector) generic.Matcher {
 
 // SelectableFields returns a label set that represents the object
 func SelectableFields(obj *api.ServiceAccount) labels.Set {
-	return labels.Set{
-		"metadata.name": obj.Name,
-	}
+	return labels.Set(generic.ObjectMetaFieldsSet(obj.ObjectMeta, true))
 }

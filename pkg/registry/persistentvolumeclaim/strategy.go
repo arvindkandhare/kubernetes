@@ -53,6 +53,10 @@ func (persistentvolumeclaimStrategy) Validate(ctx api.Context, obj runtime.Objec
 	return validation.ValidatePersistentVolumeClaim(pvc)
 }
 
+// Canonicalize normalizes the object after validation.
+func (persistentvolumeclaimStrategy) Canonicalize(obj runtime.Object) {
+}
+
 func (persistentvolumeclaimStrategy) AllowCreateOnUpdate() bool {
 	return false
 }
@@ -104,9 +108,10 @@ func MatchPersistentVolumeClaim(label labels.Selector, field fields.Selector) ge
 
 // PersistentVolumeClaimToSelectableFields returns a label set that represents the object
 func PersistentVolumeClaimToSelectableFields(persistentvolumeclaim *api.PersistentVolumeClaim) labels.Set {
-	return labels.Set{
-		"metadata.name": persistentvolumeclaim.Name,
+	objectMetaFieldsSet := generic.ObjectMetaFieldsSet(persistentvolumeclaim.ObjectMeta, true)
+	specificFieldsSet := fields.Set{
 		// This is a bug, but we need to support it for backward compatibility.
 		"name": persistentvolumeclaim.Name,
 	}
+	return labels.Set(generic.MergeFieldsSets(objectMetaFieldsSet, specificFieldsSet))
 }

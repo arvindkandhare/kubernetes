@@ -34,13 +34,14 @@ import (
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
+	awscloud "k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 )
 
 const (
 	serveHostnameImage        = "gcr.io/google_containers/serve_hostname:1.1"
 	resizeNodeReadyTimeout    = 2 * time.Minute
 	resizeNodeNotReadyTimeout = 2 * time.Minute
+	testPort                  = 9376
 )
 
 func resizeGroup(size int) error {
@@ -56,7 +57,7 @@ func resizeGroup(size int) error {
 		return err
 	} else {
 		// Supported by aws
-		instanceGroups, ok := testContext.CloudConfig.Provider.(aws_cloud.InstanceGroups)
+		instanceGroups, ok := testContext.CloudConfig.Provider.(awscloud.InstanceGroups)
 		if !ok {
 			return fmt.Errorf("Provider does not support InstanceGroups")
 		}
@@ -78,7 +79,7 @@ func groupSize() (int, error) {
 		return len(re.FindAllString(string(output), -1)), nil
 	} else {
 		// Supported by aws
-		instanceGroups, ok := testContext.CloudConfig.Provider.(aws_cloud.InstanceGroups)
+		instanceGroups, ok := testContext.CloudConfig.Provider.(awscloud.InstanceGroups)
 		if !ok {
 			return -1, fmt.Errorf("provider does not support InstanceGroups")
 		}
@@ -111,25 +112,26 @@ func waitForGroupSize(size int) error {
 	return fmt.Errorf("timeout waiting %v for node instance group size to be %d", timeout, size)
 }
 
-func svcByName(name string) *api.Service {
+func svcByName(name string, port int) *api.Service {
 	return &api.Service{
 		ObjectMeta: api.ObjectMeta{
-			Name: "test-service",
+			Name: name,
 		},
 		Spec: api.ServiceSpec{
+			Type: api.ServiceTypeNodePort,
 			Selector: map[string]string{
 				"name": name,
 			},
 			Ports: []api.ServicePort{{
-				Port:       9376,
-				TargetPort: util.NewIntOrStringFromInt(9376),
+				Port:       port,
+				TargetPort: util.NewIntOrStringFromInt(port),
 			}},
 		},
 	}
 }
 
 func newSVCByName(c *client.Client, ns, name string) error {
-	_, err := c.Services(ns).Create(svcByName(name))
+	_, err := c.Services(ns).Create(svcByName(name, testPort))
 	return err
 }
 
@@ -384,27 +386,13 @@ func performTemporaryNetworkFailure(c *client.Client, ns, rcName string, replica
 }
 
 var _ = Describe("Nodes", func() {
+	framework := NewFramework("resize-nodes")
 	var c *client.Client
 	var ns string
 
 	BeforeEach(func() {
-		var err error
-		c, err = loadClient()
-		expectNoError(err)
-		testingNs, err := createTestingNS("resize-nodes", c)
-		ns = testingNs.Name
-		Expect(err).NotTo(HaveOccurred())
-	})
-
-	AfterEach(func() {
-		By("checking whether all nodes are healthy")
-		if err := allNodesReady(c, time.Minute); err != nil {
-			Failf("Not all nodes are ready: %v", err)
-		}
-		By(fmt.Sprintf("destroying namespace for this suite %s", ns))
-		if err := deleteNS(c, ns, 5*time.Minute /* namespace deletion timeout */); err != nil {
-			Failf("Couldn't delete namespace '%s', %v", ns, err)
-		}
+		c = framework.Client
+		ns = framework.Namespace.Name
 	})
 
 	Describe("Resize", func() {
@@ -432,6 +420,14 @@ var _ = Describe("Nodes", func() {
 			if err := waitForClusterSize(c, testContext.CloudConfig.NumNodes, 10*time.Minute); err != nil {
 				Failf("Couldn't restore the original cluster size: %v", err)
 			}
+			// Many e2e tests assume that the cluster is fully healthy before they start.  Wait until
+			// the cluster is restored to health.
+			By("waiting for system pods to successfully restart")
+			pods, err := framework.Client.Pods(api.NamespaceSystem).List(labels.Everything(), fields.Everything())
+			Expect(err).NotTo(HaveOccurred())
+
+			err = waitForPodsRunningReady(api.NamespaceSystem, len(pods.Items), podReadyBeforeTimeout)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("should be able to delete nodes", func() {

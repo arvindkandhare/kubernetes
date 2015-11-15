@@ -25,8 +25,10 @@ import (
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/registry/service/allocator"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 	"k8s.io/kubernetes/pkg/tools"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
+
+	"golang.org/x/net/context"
 )
 
 func newStorage(t *testing.T) (*Etcd, *tools.FakeEtcdClient, allocator.Interface) {
@@ -84,7 +86,7 @@ func TestStore(t *testing.T) {
 	other := allocator.NewAllocationMap(100, "rangeSpecValue")
 
 	allocation := &api.RangeAllocation{}
-	if err := storage.storage.Get(key(), allocation, false); err != nil {
+	if err := storage.storage.Get(context.TODO(), key(), allocation, false); err != nil {
 		t.Fatal(err)
 	}
 	if allocation.ResourceVersion != "2" {

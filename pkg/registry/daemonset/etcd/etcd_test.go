@@ -20,27 +20,28 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/tools"
 )
 
 func newStorage(t *testing.T) (*REST, *StatusREST, *tools.FakeEtcdClient) {
-	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "experimental")
-	storage, statusStorage := NewREST(etcdStorage)
-	return storage, statusStorage, fakeClient
+	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "extensions")
+	daemonSetStorage, statusStorage := NewREST(etcdStorage, generic.UndecoratedStorage)
+	return daemonSetStorage, statusStorage, fakeClient
 }
 
-func newValidDaemonSet() *experimental.DaemonSet {
-	return &experimental.DaemonSet{
+func newValidDaemonSet() *extensions.DaemonSet {
+	return &extensions.DaemonSet{
 		ObjectMeta: api.ObjectMeta{
 			Name:      "foo",
 			Namespace: api.NamespaceDefault,
 		},
-		Spec: experimental.DaemonSetSpec{
+		Spec: extensions.DaemonSetSpec{
 			Selector: map[string]string{"a": "b"},
 			Template: &api.PodTemplateSpec{
 				ObjectMeta: api.ObjectMeta{
@@ -73,8 +74,8 @@ func TestCreate(t *testing.T) {
 		// valid
 		ds,
 		// invalid (invalid selector)
-		&experimental.DaemonSet{
-			Spec: experimental.DaemonSetSpec{
+		&extensions.DaemonSet{
+			Spec: extensions.DaemonSetSpec{
 				Selector: map[string]string{},
 				Template: validDaemonSet.Spec.Template,
 			},
@@ -90,28 +91,28 @@ func TestUpdate(t *testing.T) {
 		newValidDaemonSet(),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.DaemonSet)
+			object := obj.(*extensions.DaemonSet)
 			object.Spec.Template.Spec.NodeSelector = map[string]string{"c": "d"}
 			return object
 		},
 		// invalid updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.DaemonSet)
+			object := obj.(*extensions.DaemonSet)
 			object.UID = "newUID"
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.DaemonSet)
+			object := obj.(*extensions.DaemonSet)
 			object.Name = ""
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.DaemonSet)
+			object := obj.(*extensions.DaemonSet)
 			object.Spec.Template.Spec.RestartPolicy = api.RestartPolicyOnFailure
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.DaemonSet)
+			object := obj.(*extensions.DaemonSet)
 			object.Spec.Selector = map[string]string{}
 			return object
 		},

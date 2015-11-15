@@ -23,7 +23,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/golang/glog"
@@ -31,7 +30,7 @@ import (
 	"k8s.io/kubernetes/pkg/proxy"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/iptables"
 )
 
@@ -82,23 +81,24 @@ func logTimeout(err error) bool {
 // Proxier is a simple proxy for TCP connections between a localhost:lport
 // and services that provide the actual implementations.
 type Proxier struct {
-	loadBalancer  LoadBalancer
-	mu            sync.Mutex // protects serviceMap
-	serviceMap    map[proxy.ServicePortName]*serviceInfo
-	syncPeriod    time.Duration
-	portMapMutex  sync.Mutex
-	portMap       map[portMapKey]*portMapValue
-	numProxyLoops int32 // use atomic ops to access this; mostly for testing
-	listenIP      net.IP
-	iptables      iptables.Interface
-	hostIP        net.IP
-	proxyPorts    PortAllocator
+	loadBalancer   LoadBalancer
+	mu             sync.Mutex // protects serviceMap
+	serviceMap     map[proxy.ServicePortName]*serviceInfo
+	syncPeriod     time.Duration
+	udpIdleTimeout time.Duration
+	portMapMutex   sync.Mutex
+	portMap        map[portMapKey]*portMapValue
+	numProxyLoops  int32 // use atomic ops to access this; mostly for testing
+	listenIP       net.IP
+	iptables       iptables.Interface
+	hostIP         net.IP
+	proxyPorts     PortAllocator
 }
 
 // assert Proxier is a ProxyProvider
 var _ proxy.ProxyProvider = &Proxier{}
 
-// A key for the portMap.  The ip has to be a tring because slices can't be map
+// A key for the portMap.  The ip has to be a string because slices can't be map
 // keys.
 type portMapKey struct {
 	ip       string
@@ -137,7 +137,7 @@ func IsProxyLocked(err error) bool {
 // if iptables fails to update or acquire the initial lock. Once a proxier is
 // created, it will keep iptables up to date in the background and will not
 // terminate if a particular iptables call fails.
-func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, pr util.PortRange, syncPeriod time.Duration) (*Proxier, error) {
+func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, pr util.PortRange, syncPeriod, udpIdleTimeout time.Duration) (*Proxier, error) {
 	if listenIP.Equal(localhostIPv4) || listenIP.Equal(localhostIPv6) {
 		return nil, ErrProxyOnLocalhost
 	}
@@ -149,20 +149,16 @@ func NewProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.In
 
 	err = setRLimit(64 * 1000)
 	if err != nil {
-		return nil, fmt.Errorf("failed to set open file handler limit", err)
+		return nil, fmt.Errorf("failed to set open file handler limit: %v", err)
 	}
 
 	proxyPorts := newPortAllocator(pr)
 
 	glog.V(2).Infof("Setting proxy IP to %v and initializing iptables", hostIP)
-	return createProxier(loadBalancer, listenIP, iptables, hostIP, proxyPorts, syncPeriod)
+	return createProxier(loadBalancer, listenIP, iptables, hostIP, proxyPorts, syncPeriod, udpIdleTimeout)
 }
 
-func setRLimit(limit uint64) error {
-	return syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{Max: limit, Cur: limit})
-}
-
-func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, hostIP net.IP, proxyPorts PortAllocator, syncPeriod time.Duration) (*Proxier, error) {
+func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables.Interface, hostIP net.IP, proxyPorts PortAllocator, syncPeriod, udpIdleTimeout time.Duration) (*Proxier, error) {
 	// convenient to pass nil for tests..
 	if proxyPorts == nil {
 		proxyPorts = newPortAllocator(util.PortRange{})
@@ -177,14 +173,15 @@ func createProxier(loadBalancer LoadBalancer, listenIP net.IP, iptables iptables
 		return nil, fmt.Errorf("failed to flush iptables: %v", err)
 	}
 	return &Proxier{
-		loadBalancer: loadBalancer,
-		serviceMap:   make(map[proxy.ServicePortName]*serviceInfo),
-		portMap:      make(map[portMapKey]*portMapValue),
-		syncPeriod:   syncPeriod,
-		listenIP:     listenIP,
-		iptables:     iptables,
-		hostIP:       hostIP,
-		proxyPorts:   proxyPorts,
+		loadBalancer:   loadBalancer,
+		serviceMap:     make(map[proxy.ServicePortName]*serviceInfo),
+		portMap:        make(map[portMapKey]*portMapValue),
+		syncPeriod:     syncPeriod,
+		udpIdleTimeout: udpIdleTimeout,
+		listenIP:       listenIP,
+		iptables:       iptables,
+		hostIP:         hostIP,
+		proxyPorts:     proxyPorts,
 	}, nil
 }
 
@@ -218,7 +215,7 @@ func CleanupLeftovers(ipt iptables.Interface) (encounteredError bool) {
 	// flush and delete chains.
 	chains := []iptables.Chain{iptablesContainerPortalChain, iptablesHostPortalChain, iptablesHostNodePortChain, iptablesContainerNodePortChain}
 	for _, c := range chains {
-		// flush chain, then if sucessful delete, delete will fail if flush fails.
+		// flush chain, then if successful delete, delete will fail if flush fails.
 		if err := ipt.FlushChain(iptables.TableNAT, c); err != nil {
 			glog.Errorf("Error flushing userspace chain: %v", err)
 			encounteredError = true
@@ -345,10 +342,7 @@ func (proxier *Proxier) addServiceOnPort(service proxy.ServicePortName, protocol
 	return si, nil
 }
 
-// How long we leave idle UDP connections open.
-const udpIdleTimeout = 250 * time.Millisecond
-
-// OnUpdate manages the active set of service proxies.
+// OnServiceUpdate manages the active set of service proxies.
 // Active service proxies are reinitialized if found in the update set or
 // shutdown if missing from the update set.
 func (proxier *Proxier) OnServiceUpdate(services []api.Service) {
@@ -393,7 +387,7 @@ func (proxier *Proxier) OnServiceUpdate(services []api.Service) {
 			}
 
 			glog.V(1).Infof("Adding new service %q at %s:%d/%s", serviceName, serviceIP, servicePort.Port, servicePort.Protocol)
-			info, err = proxier.addServiceOnPort(serviceName, servicePort.Protocol, proxyPort, udpIdleTimeout)
+			info, err = proxier.addServiceOnPort(serviceName, servicePort.Protocol, proxyPort, proxier.udpIdleTimeout)
 			if err != nil {
 				glog.Errorf("Failed to start proxy for %q: %v", serviceName, err)
 				continue
@@ -652,7 +646,7 @@ func (proxier *Proxier) closePortal(service proxy.ServicePortName, info *service
 	} else {
 		glog.Errorf("Some errors closing iptables portals for service %q", service)
 	}
-	return errors.NewAggregate(el)
+	return utilerrors.NewAggregate(el)
 }
 
 func (proxier *Proxier) closeOnePortal(portal portal, protocol api.Protocol, proxyIP net.IP, proxyPort int, name proxy.ServicePortName) []error {
@@ -661,7 +655,7 @@ func (proxier *Proxier) closeOnePortal(portal portal, protocol api.Protocol, pro
 	if local, err := isLocalIP(portal.ip); err != nil {
 		el = append(el, fmt.Errorf("can't determine if IP is local, assuming not: %v", err))
 	} else if local {
-		if err := proxier.releaseNodePort(nil, portal.port, protocol, name); err != nil {
+		if err := proxier.releaseNodePort(portal.ip, portal.port, protocol, name); err != nil {
 			el = append(el, err)
 		}
 	}
@@ -824,7 +818,7 @@ func iptablesFlush(ipt iptables.Interface) error {
 	if len(el) != 0 {
 		glog.Errorf("Some errors flushing old iptables portals: %v", el)
 	}
-	return errors.NewAggregate(el)
+	return utilerrors.NewAggregate(el)
 }
 
 // Used below.
@@ -923,7 +917,7 @@ func (proxier *Proxier) iptablesHostPortalArgs(destIP net.IP, addDstLocalMatch b
 	// If the proxy is bound (see Proxier.listenIP) to 0.0.0.0 ("any
 	// interface") we want to do the same as from-container traffic and use
 	// REDIRECT.  Except that it doesn't work (empirically).  REDIRECT on
-	// localpackets sends the traffic to localhost (special case, but it is
+	// local packets sends the traffic to localhost (special case, but it is
 	// documented) but the response comes from the eth0 IP (not sure why,
 	// truthfully), which makes DNS unhappy.
 	//

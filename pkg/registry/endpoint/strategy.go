@@ -46,20 +46,21 @@ func (endpointsStrategy) NamespaceScoped() bool {
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
 func (endpointsStrategy) PrepareForCreate(obj runtime.Object) {
-	endpoints := obj.(*api.Endpoints)
-	endpoints.Subsets = endptspkg.RepackSubsets(endpoints.Subsets)
 }
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
 func (endpointsStrategy) PrepareForUpdate(obj, old runtime.Object) {
-	newEndpoints := obj.(*api.Endpoints)
-	_ = old.(*api.Endpoints)
-	newEndpoints.Subsets = endptspkg.RepackSubsets(newEndpoints.Subsets)
 }
 
 // Validate validates a new endpoints.
 func (endpointsStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
 	return validation.ValidateEndpoints(obj.(*api.Endpoints))
+}
+
+// Canonicalize normalizes the object after validation.
+func (endpointsStrategy) Canonicalize(obj runtime.Object) {
+	endpoints := obj.(*api.Endpoints)
+	endpoints.Subsets = endptspkg.RepackSubsets(endpoints.Subsets)
 }
 
 // AllowCreateOnUpdate is true for endpoints.
@@ -70,7 +71,7 @@ func (endpointsStrategy) AllowCreateOnUpdate() bool {
 // ValidateUpdate is the default update validation for an end user.
 func (endpointsStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
 	errorList := validation.ValidateEndpoints(obj.(*api.Endpoints))
-	return append(errorList, validation.ValidateEndpointsUpdate(old.(*api.Endpoints), obj.(*api.Endpoints))...)
+	return append(errorList, validation.ValidateEndpointsUpdate(obj.(*api.Endpoints), old.(*api.Endpoints))...)
 }
 
 func (endpointsStrategy) AllowUnconditionalUpdate() bool {
@@ -89,7 +90,5 @@ func EndpointsAttributes(obj runtime.Object) (objLabels labels.Set, objFields fi
 	if !ok {
 		return nil, nil, fmt.Errorf("invalid object type %#v", obj)
 	}
-	return endpoints.Labels, fields.Set{
-		"metadata.name": endpoints.Name,
-	}, nil
+	return endpoints.Labels, generic.ObjectMetaFieldsSet(endpoints.ObjectMeta, true), nil
 }

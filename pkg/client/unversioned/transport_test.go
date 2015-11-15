@@ -17,19 +17,11 @@ limitations under the License.
 package unversioned
 
 import (
-	"encoding/base64"
 	"net/http"
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api/testapi"
 )
-
-func TestUnsecuredTLSTransport(t *testing.T) {
-	cfg := NewUnsafeTLSConfig()
-	if !cfg.InsecureSkipVerify {
-		t.Errorf("expected config to be insecure")
-	}
-}
 
 type testRoundTripper struct {
 	Request  *http.Request
@@ -67,7 +59,7 @@ func TestBasicAuthRoundTripper(t *testing.T) {
 	if rt.Request == req {
 		t.Fatalf("round tripper should have copied request object: %#v", rt.Request)
 	}
-	if rt.Request.Header.Get("Authorization") != "Basic "+base64.StdEncoding.EncodeToString([]byte("user:pass")) {
+	if user, pass, found := rt.Request.BasicAuth(); !found || user != "user" || pass != "pass" {
 		t.Errorf("unexpected authorization header: %#v", rt.Request)
 	}
 }

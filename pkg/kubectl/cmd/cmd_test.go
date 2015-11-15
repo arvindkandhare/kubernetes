@@ -228,19 +228,36 @@ func NewAPIFactory() (*cmdutil.Factory, *testFactory, runtime.Codec) {
 		ClientConfig: func() (*client.Config, error) {
 			return t.ClientConfig, t.Err
 		},
-		CanBeExposed: func(kind string) error {
-			if kind != "ReplicationController" && kind != "Service" && kind != "Pod" {
-				return fmt.Errorf("invalid resource provided: %v, only a replication controller, service or pod is accepted", kind)
-			}
-			return nil
-		},
 		Generator: func(name string) (kubectl.Generator, bool) {
 			generator, ok := generators[name]
 			return generator, ok
 		},
+		LogsForObject: func(object, options runtime.Object) (*client.Request, error) {
+			fakeClient := t.Client.(*fake.RESTClient)
+			c := client.NewOrDie(t.ClientConfig)
+			c.Client = fakeClient.Client
+
+			switch t := object.(type) {
+			case *api.Pod:
+				opts, ok := options.(*api.PodLogOptions)
+				if !ok {
+					return nil, errors.New("provided options object is not a PodLogOptions")
+				}
+				return c.Pods(t.Namespace).GetLogs(t.Name, opts), nil
+			default:
+				_, kind, err := api.Scheme.ObjectVersionAndKind(object)
+				if err != nil {
+					return nil, err
+				}
+				return nil, fmt.Errorf("cannot get the logs from %s", kind)
+			}
+		},
 	}
 	rf := cmdutil.NewFactory(nil)
 	f.PodSelectorForObject = rf.PodSelectorForObject
+	f.PortsForObject = rf.PortsForObject
+	f.LabelsForObject = rf.LabelsForObject
+	f.CanBeExposed = rf.CanBeExposed
 	return f, t, testapi.Default.Codec()
 }
 

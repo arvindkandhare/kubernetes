@@ -10,19 +10,16 @@
 "containers":[
     {
     "name": "etcd-container",
-    "image": "gcr.io/google_containers/etcd:2.0.12",
+    "image": "gcr.io/google_containers/etcd:2.2.1",
     "resources": {
       "limits": {
-        "cpu": "200m"
-      },
-      "requests": {
-        "cpu": "100m"
+        "cpu": {{ cpulimit }}
       }
     },
     "command": [
               "/bin/sh",
               "-c",
-              "/usr/local/bin/etcd --listen-peer-urls=http://127.0.0.1:{{ server_port }} --addr 127.0.0.1:{{ port }} --bind-addr 127.0.0.1:{{ port }} --data-dir /var/etcd/data{{ suffix }} 1>>/var/log/etcd{{ suffix }}.log 2>&1"
+              "/usr/local/bin/etcd --listen-peer-urls http://127.0.0.1:{{ server_port }} --addr 127.0.0.1:{{ port }} --bind-addr 127.0.0.1:{{ port }} --data-dir /var/etcd/data{{ suffix }} 1>>/var/log/etcd{{ suffix }}.log 2>&1"
             ],
     "livenessProbe": {
       "httpGet": {

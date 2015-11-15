@@ -21,9 +21,11 @@ import (
 	"io"
 
 	"github.com/spf13/cobra"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/kubectl"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/resource"
+	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -48,9 +50,6 @@ $ kubectl get pods
 
 # List all pods in ps output format with more information (such as node name).
 $ kubectl get pods -o wide
-
-# List all pods in resource/name format (such as pod/nginx).
-$ kubectl get pods -o name
 
 # List a single replication controller with specified NAME in ps output format.
 $ kubectl get replicationcontroller web
@@ -145,7 +144,7 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 			return err
 		}
 		if len(infos) != 1 {
-			return fmt.Errorf("watch is only supported on a single resource - %d resources were found", len(infos))
+			return fmt.Errorf("watch is only supported on individual resources and resource collections - %d resources were found", len(infos))
 		}
 		info := infos[0]
 		mapping := info.ResourceMapping()
@@ -219,15 +218,52 @@ func RunGet(f *cmdutil.Factory, out io.Writer, cmd *cobra.Command, args []string
 		return printer.PrintObj(obj, out)
 	}
 
+	infos, err := b.Flatten().Do().Infos()
+	if err != nil {
+		return err
+	}
+	objs := make([]runtime.Object, len(infos))
+	for ix := range infos {
+		objs[ix] = infos[ix].Object
+	}
+
+	sorting, err := cmd.Flags().GetString("sort-by")
+	var sorter *kubectl.RuntimeSort
+	if err == nil && len(sorting) > 0 {
+		if sorter, err = kubectl.SortObjects(objs, sorting); err != nil {
+			return err
+		}
+	}
+
 	// use the default printer for each object
-	return b.Do().Visit(func(r *resource.Info, err error) error {
-		if err != nil {
+	printer = nil
+	var lastMapping *meta.RESTMapping
+	w := kubectl.GetNewTabWriter(out)
+	defer w.Flush()
+
+	for ix := range objs {
+		var mapping *meta.RESTMapping
+		if sorter != nil {
+			mapping = infos[sorter.OriginalPosition(ix)].Mapping
+		} else {
+			mapping = infos[ix].Mapping
+		}
+		if printer == nil || lastMapping == nil || mapping == nil || mapping.Resource != lastMapping.Resource {
+			printer, err = f.PrinterForMapping(cmd, mapping, allNamespaces)
+			if err != nil {
+				return err
+			}
+			lastMapping = mapping
+		}
+		if _, found := printer.(*kubectl.HumanReadablePrinter); found {
+			if err := printer.PrintObj(objs[ix], w); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := printer.PrintObj(objs[ix], out); err != nil {
 			return err
 		}
-		printer, err := f.PrinterForMapping(cmd, r.Mapping, allNamespaces)
-		if err != nil {
-			return err
-		}
-		return printer.PrintObj(r.Object, out)
-	})
+	}
+	return nil
 }

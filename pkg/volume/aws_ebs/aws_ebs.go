@@ -26,7 +26,7 @@ import (
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
+	awscloud "k8s.io/kubernetes/pkg/cloudprovider/providers/aws"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/exec"
@@ -154,9 +154,9 @@ func detachDiskLogError(ebs *awsElasticBlockStore) {
 }
 
 // getVolumeProvider returns the AWS Volumes interface
-func (ebs *awsElasticBlockStore) getVolumeProvider() (aws_cloud.Volumes, error) {
+func (ebs *awsElasticBlockStore) getVolumeProvider() (awscloud.Volumes, error) {
 	cloud := ebs.plugin.host.GetCloudProvider()
-	volumes, ok := cloud.(aws_cloud.Volumes)
+	volumes, ok := cloud.(awscloud.Volumes)
 	if !ok {
 		return nil, fmt.Errorf("Cloud provider does not support volumes")
 	}
@@ -176,6 +176,10 @@ type awsElasticBlockStoreBuilder struct {
 }
 
 var _ volume.Builder = &awsElasticBlockStoreBuilder{}
+
+func (_ *awsElasticBlockStoreBuilder) SupportsOwnershipManagement() bool {
+	return true
+}
 
 // SetUp attaches the disk and bind mounts to the volume path.
 func (b *awsElasticBlockStoreBuilder) SetUp() error {
@@ -244,6 +248,10 @@ func (b *awsElasticBlockStoreBuilder) SetUpAt(dir string) error {
 
 func (b *awsElasticBlockStoreBuilder) IsReadOnly() bool {
 	return b.readOnly
+}
+
+func (b *awsElasticBlockStoreBuilder) SupportsSELinux() bool {
+	return true
 }
 
 func makeGlobalPDPath(host volume.VolumeHost, volumeID string) string {

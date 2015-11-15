@@ -27,6 +27,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/api/validation"
 	"k8s.io/kubernetes/pkg/conversion"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
@@ -153,6 +154,7 @@ func (t *Tester) TestCreate(valid runtime.Object, setFn SetFunc, getFn GetFunc, 
 		t.testCreateRejectsMismatchedNamespace(copyOrDie(valid))
 	}
 	t.testCreateInvokesValidation(invalid...)
+	t.testCreateValidatesNames(copyOrDie(valid))
 }
 
 // Test updating an object.
@@ -343,6 +345,32 @@ func (t *Tester) testCreateIgnoresMismatchedNamespace(valid runtime.Object) {
 	createdObjectMeta := t.getObjectMetaOrFail(created)
 	if createdObjectMeta.Namespace != api.NamespaceNone {
 		t.Errorf("Expected empty namespace on created object, got '%v'", createdObjectMeta.Namespace)
+	}
+}
+
+func (t *Tester) testCreateValidatesNames(valid runtime.Object) {
+	for _, invalidName := range validation.NameMayNotBe {
+		objCopy := copyOrDie(valid)
+		objCopyMeta := t.getObjectMetaOrFail(objCopy)
+		objCopyMeta.Name = invalidName
+
+		ctx := t.TestContext()
+		_, err := t.storage.(rest.Creater).Create(ctx, objCopy)
+		if !errors.IsInvalid(err) {
+			t.Errorf("%s: Expected to get an invalid resource error, got %v", invalidName, err)
+		}
+	}
+
+	for _, invalidSuffix := range validation.NameMayNotContain {
+		objCopy := copyOrDie(valid)
+		objCopyMeta := t.getObjectMetaOrFail(objCopy)
+		objCopyMeta.Name += invalidSuffix
+
+		ctx := t.TestContext()
+		_, err := t.storage.(rest.Creater).Create(ctx, objCopy)
+		if !errors.IsInvalid(err) {
+			t.Errorf("%s: Expected to get an invalid resource error, got %v", invalidSuffix, err)
+		}
 	}
 }
 
@@ -825,7 +853,7 @@ func (t *Tester) testListError() {
 
 	storageError := fmt.Errorf("test error")
 	t.withStorageError(storageError, func() {
-		_, err := t.storage.(rest.Lister).List(ctx, labels.Everything(), fields.Everything())
+		_, err := t.storage.(rest.Lister).List(ctx, nil)
 		if err != storageError {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -842,7 +870,7 @@ func (t *Tester) testListFound(obj runtime.Object, assignFn AssignFunc) {
 
 	existing := assignFn([]runtime.Object{foo1, foo2})
 
-	listObj, err := t.storage.(rest.Lister).List(ctx, labels.Everything(), fields.Everything())
+	listObj, err := t.storage.(rest.Lister).List(ctx, nil)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -874,7 +902,8 @@ func (t *Tester) testListMatchLabels(obj runtime.Object, assignFn AssignFunc) {
 	filtered := []runtime.Object{existing[1]}
 
 	selector := labels.SelectorFromSet(labels.Set(testLabels))
-	listObj, err := t.storage.(rest.Lister).List(ctx, selector, fields.Everything())
+	options := &api.ListOptions{LabelSelector: selector}
+	listObj, err := t.storage.(rest.Lister).List(ctx, options)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -896,7 +925,7 @@ func (t *Tester) testListNotFound(assignFn AssignFunc, setRVFn SetRVFunc) {
 	setRVFn(uint64(123))
 	_ = assignFn([]runtime.Object{})
 
-	listObj, err := t.storage.(rest.Lister).List(ctx, labels.Everything(), fields.Everything())
+	listObj, err := t.storage.(rest.Lister).List(ctx, nil)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -922,7 +951,7 @@ func (t *Tester) testListNotFound(assignFn AssignFunc, setRVFn SetRVFunc) {
 
 func (t *Tester) testWatch(initWatchFn InitWatchFunc, injectErrFn InjectErrFunc) {
 	ctx := t.TestContext()
-	watcher, err := t.storage.(rest.Watcher).Watch(ctx, labels.Everything(), fields.Everything(), "1")
+	watcher, err := t.storage.(rest.Watcher).Watch(ctx, &api.ListOptions{ResourceVersion: "1"})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -948,7 +977,8 @@ func (t *Tester) testWatchFields(obj runtime.Object, initWatchFn InitWatchFunc, 
 
 	for _, field := range fieldsPass {
 		for _, action := range actions {
-			watcher, err := t.storage.(rest.Watcher).Watch(ctx, labels.Everything(), field.AsSelector(), "1")
+			options := &api.ListOptions{FieldSelector: field.AsSelector(), ResourceVersion: "1"}
+			watcher, err := t.storage.(rest.Watcher).Watch(ctx, options)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -971,7 +1001,8 @@ func (t *Tester) testWatchFields(obj runtime.Object, initWatchFn InitWatchFunc, 
 
 	for _, field := range fieldsFail {
 		for _, action := range actions {
-			watcher, err := t.storage.(rest.Watcher).Watch(ctx, labels.Everything(), field.AsSelector(), "1")
+			options := &api.ListOptions{FieldSelector: field.AsSelector(), ResourceVersion: "1"}
+			watcher, err := t.storage.(rest.Watcher).Watch(ctx, options)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -996,7 +1027,8 @@ func (t *Tester) testWatchLabels(obj runtime.Object, initWatchFn InitWatchFunc, 
 
 	for _, label := range labelsPass {
 		for _, action := range actions {
-			watcher, err := t.storage.(rest.Watcher).Watch(ctx, label.AsSelector(), fields.Everything(), "1")
+			options := &api.ListOptions{LabelSelector: label.AsSelector(), ResourceVersion: "1"}
+			watcher, err := t.storage.(rest.Watcher).Watch(ctx, options)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}
@@ -1019,7 +1051,8 @@ func (t *Tester) testWatchLabels(obj runtime.Object, initWatchFn InitWatchFunc, 
 
 	for _, label := range labelsFail {
 		for _, action := range actions {
-			watcher, err := t.storage.(rest.Watcher).Watch(ctx, label.AsSelector(), fields.Everything(), "1")
+			options := &api.ListOptions{LabelSelector: label.AsSelector(), ResourceVersion: "1"}
+			watcher, err := t.storage.(rest.Watcher).Watch(ctx, options)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 			}

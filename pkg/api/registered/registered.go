@@ -30,14 +30,15 @@ import (
 var RegisteredVersions []string
 
 func init() {
-	// TODO: caesarxuchao: rename this variable to validGroupVersions
-	validAPIVersions := map[string]bool{
-		"v1": true,
-		"experimental/v1alpha1": true,
+	validGroupVersions := map[string]bool{
+		"v1":                       true,
+		"extensions/v1beta1":       true,
+		"componentconfig/v1alpha1": true,
+		"metrics/v1alpha1":         true,
 	}
 
 	// The default list of supported api versions, in order of most preferred to the least.
-	defaultSupportedVersions := "v1,experimental/v1alpha1"
+	defaultSupportedVersions := "v1,extensions/v1beta1,componentconfig/v1alpha1"
 	// Env var KUBE_API_VERSIONS is a comma separated list of API versions that should be registered in the scheme.
 	// The versions should be in the order of most preferred to the least.
 	supportedVersions := os.Getenv("KUBE_API_VERSIONS")
@@ -47,11 +48,11 @@ func init() {
 	versions := strings.Split(supportedVersions, ",")
 	for _, version := range versions {
 		// Verify that the version is valid.
-		valid, ok := validAPIVersions[version]
+		valid, ok := validGroupVersions[version]
 		if !ok || !valid {
 			// Not a valid API version.
 			glog.Fatalf("invalid api version: %s in KUBE_API_VERSIONS: %s. List of valid API versions: %v",
-				version, os.Getenv("KUBE_API_VERSIONS"), validAPIVersions)
+				version, os.Getenv("KUBE_API_VERSIONS"), validGroupVersions)
 		}
 		RegisteredVersions = append(RegisteredVersions, version)
 	}

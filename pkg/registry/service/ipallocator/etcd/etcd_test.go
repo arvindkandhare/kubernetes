@@ -25,11 +25,11 @@ import (
 	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/registry/service/allocator"
-	allocator_etcd "k8s.io/kubernetes/pkg/registry/service/allocator/etcd"
+	allocatoretcd "k8s.io/kubernetes/pkg/registry/service/allocator/etcd"
 	"k8s.io/kubernetes/pkg/registry/service/ipallocator"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 	"k8s.io/kubernetes/pkg/tools"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
 )
 
 func newStorage(t *testing.T) (*tools.FakeEtcdClient, ipallocator.Interface, allocator.Interface) {
@@ -43,7 +43,7 @@ func newStorage(t *testing.T) (*tools.FakeEtcdClient, ipallocator.Interface, all
 	storage := ipallocator.NewAllocatorCIDRRange(cidr, func(max int, rangeSpec string) allocator.Interface {
 		mem := allocator.NewAllocationMap(max, rangeSpec)
 		backing = mem
-		etcd := allocator_etcd.NewEtcd(mem, "/ranges/serviceips", "serviceipallocation", etcdStorage)
+		etcd := allocatoretcd.NewEtcd(mem, "/ranges/serviceips", "serviceipallocation", etcdStorage)
 		return etcd
 	})
 

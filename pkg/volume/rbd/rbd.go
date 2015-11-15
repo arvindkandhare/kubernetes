@@ -131,7 +131,7 @@ func (plugin *rbdPlugin) newBuilderInternal(spec *volume.Spec, podUID types.UID,
 			Pool:     pool,
 			ReadOnly: readOnly,
 			manager:  manager,
-			mounter:  mounter,
+			mounter:  &mount.SafeFormatAndMount{mounter, exec.New()},
 			plugin:   plugin,
 		},
 		Mon:     source.CephMonitors,
@@ -192,6 +192,10 @@ type rbdBuilder struct {
 
 var _ volume.Builder = &rbdBuilder{}
 
+func (_ *rbdBuilder) SupportsOwnershipManagement() bool {
+	return true
+}
+
 func (b *rbdBuilder) SetUp() error {
 	return b.SetUpAt(b.GetPath())
 }
@@ -201,18 +205,8 @@ func (b *rbdBuilder) SetUpAt(dir string) error {
 	err := diskSetUp(b.manager, *b, dir, b.mounter)
 	if err != nil {
 		glog.Errorf("rbd: failed to setup")
-		return err
 	}
-	globalPDPath := b.manager.MakeGlobalPDName(*b.rbd)
-	// make mountpoint rw/ro work as expected
-	//FIXME revisit pkg/util/mount and ensure rw/ro is implemented as expected
-	mode := "rw"
-	if b.ReadOnly {
-		mode = "ro"
-	}
-	b.plugin.execCommand("mount", []string{"-o", "remount," + mode, globalPDPath, dir})
-
-	return nil
+	return err
 }
 
 type rbdCleaner struct {
@@ -223,6 +217,10 @@ var _ volume.Cleaner = &rbdCleaner{}
 
 func (b *rbd) IsReadOnly() bool {
 	return b.ReadOnly
+}
+
+func (b *rbd) SupportsSELinux() bool {
+	return true
 }
 
 // Unmounts the bind mount, and detaches the disk only if the disk

@@ -25,9 +25,7 @@ import (
 	"crypto/sha256"
 	"encoding/base32"
 	"fmt"
-	"io/ioutil"
 	"net"
-	"path"
 	"reflect"
 	"strconv"
 	"strings"
@@ -43,6 +41,7 @@ import (
 	utilexec "k8s.io/kubernetes/pkg/util/exec"
 	utiliptables "k8s.io/kubernetes/pkg/util/iptables"
 	"k8s.io/kubernetes/pkg/util/slice"
+	utilsysctl "k8s.io/kubernetes/pkg/util/sysctl"
 )
 
 // iptablesMinVersion is the minimum version of iptables for which we will use the Proxier
@@ -66,7 +65,7 @@ const iptablesMasqueradeMark = "0x4d415351"
 // ShouldUseIptablesProxier returns true if we should use the iptables Proxier
 // instead of the "classic" userspace Proxier.  This is determined by checking
 // the iptables version and for the existence of kernel features. It may return
-// an error if it fails to get the itpables version without error, in which
+// an error if it fails to get the iptables version without error, in which
 // case it will also return false.
 func ShouldUseIptablesProxier() (bool, error) {
 	exec := utilexec.New()
@@ -90,7 +89,7 @@ func ShouldUseIptablesProxier() (bool, error) {
 	// Check for the required sysctls.  We don't care about the value, just
 	// that it exists.  If this Proxier is chosen, we'll iniialize it as we
 	// need.
-	_, err = getSysctl(sysctlRouteLocalnet)
+	_, err = utilsysctl.GetSysctl(sysctlRouteLocalnet)
 	if err != nil {
 		return false, err
 	}
@@ -98,25 +97,8 @@ func ShouldUseIptablesProxier() (bool, error) {
 	return true, nil
 }
 
-const sysctlBase = "/proc/sys"
 const sysctlRouteLocalnet = "net/ipv4/conf/all/route_localnet"
 const sysctlBridgeCallIptables = "net/bridge/bridge-nf-call-iptables"
-
-func getSysctl(sysctl string) (int, error) {
-	data, err := ioutil.ReadFile(path.Join(sysctlBase, sysctl))
-	if err != nil {
-		return -1, err
-	}
-	val, err := strconv.Atoi(strings.Trim(string(data), " \n"))
-	if err != nil {
-		return -1, err
-	}
-	return val, nil
-}
-
-func setSysctl(sysctl string, newVal int) error {
-	return ioutil.WriteFile(path.Join(sysctlBase, sysctl), []byte(strconv.Itoa(newVal)), 0640)
-}
 
 // internal struct for string service information
 type serviceInfo struct {
@@ -180,7 +162,7 @@ var _ proxy.ProxyProvider = &Proxier{}
 // will not terminate if a particular iptables call fails.
 func NewProxier(ipt utiliptables.Interface, exec utilexec.Interface, syncPeriod time.Duration, masqueradeAll bool) (*Proxier, error) {
 	// Set the route_localnet sysctl we need for
-	if err := setSysctl(sysctlRouteLocalnet, 1); err != nil {
+	if err := utilsysctl.SetSysctl(sysctlRouteLocalnet, 1); err != nil {
 		return nil, fmt.Errorf("can't set sysctl %s: %v", sysctlRouteLocalnet, err)
 	}
 
@@ -188,7 +170,7 @@ func NewProxier(ipt utiliptables.Interface, exec utilexec.Interface, syncPeriod 
 	// because we'll catch the error on the sysctl, which is what we actually
 	// care about.
 	exec.Command("modprobe", "br-netfilter").CombinedOutput()
-	if err := setSysctl(sysctlBridgeCallIptables, 1); err != nil {
+	if err := utilsysctl.SetSysctl(sysctlBridgeCallIptables, 1); err != nil {
 		glog.Warningf("can't set sysctl %s: %v", sysctlBridgeCallIptables, err)
 	}
 
@@ -206,7 +188,7 @@ func NewProxier(ipt utiliptables.Interface, exec utilexec.Interface, syncPeriod 
 // It returns true if an error was encountered. Errors are logged.
 func CleanupLeftovers(ipt utiliptables.Interface) (encounteredError bool) {
 	//TODO: actually tear down all rules and chains.
-	args := []string{"-j", "KUBE-SERVICES"}
+	args := []string{"-m", "comment", "--comment", "kubernetes service portals", "-j", string(iptablesServicesChain)}
 	if err := ipt.DeleteRule(utiliptables.TableNAT, utiliptables.ChainOutput, args...); err != nil {
 		glog.Errorf("Error removing pure-iptables proxy rule: %v", err)
 		encounteredError = true
@@ -214,6 +196,27 @@ func CleanupLeftovers(ipt utiliptables.Interface) (encounteredError bool) {
 	if err := ipt.DeleteRule(utiliptables.TableNAT, utiliptables.ChainPrerouting, args...); err != nil {
 		glog.Errorf("Error removing pure-iptables proxy rule: %v", err)
 		encounteredError = true
+	}
+
+	args = []string{"-m", "comment", "--comment", "kubernetes service traffic requiring SNAT", "-m", "mark", "--mark", iptablesMasqueradeMark, "-j", "MASQUERADE"}
+	if err := ipt.DeleteRule(utiliptables.TableNAT, utiliptables.ChainPostrouting, args...); err != nil {
+		glog.Errorf("Error removing pure-iptables proxy rule: %v", err)
+		encounteredError = true
+	}
+
+	// flush and delete chains.
+	chains := []utiliptables.Chain{iptablesServicesChain, iptablesNodePortsChain}
+	for _, c := range chains {
+		// flush chain, then if sucessful delete, delete will fail if flush fails.
+		if err := ipt.FlushChain(utiliptables.TableNAT, c); err != nil {
+			glog.Errorf("Error flushing pure-iptables proxy chain: %v", err)
+			encounteredError = true
+		} else {
+			if err = ipt.DeleteChain(utiliptables.TableNAT, c); err != nil {
+				glog.Errorf("Error deleting pure-iptables proxy chain: %v", err)
+				encounteredError = true
+			}
+		}
 	}
 	return encounteredError
 }
@@ -479,7 +482,7 @@ func (proxier *Proxier) syncProxyRules() {
 	existingChains := make(map[utiliptables.Chain]string)
 	iptablesSaveRaw, err := proxier.iptables.Save(utiliptables.TableNAT)
 	if err != nil { // if we failed to get any rules
-		glog.Errorf("Failed to execute iptable-save, syncing all rules. %s", err.Error())
+		glog.Errorf("Failed to execute iptables-save, syncing all rules. %s", err.Error())
 	} else { // otherwise parse the output
 		existingChains = getChainLines(utiliptables.TableNAT, iptablesSaveRaw)
 	}
@@ -783,31 +786,82 @@ func makeChainLine(chain utiliptables.Chain) string {
 // getChainLines parses a table's iptables-save data to find chains in the table.
 // It returns a map of iptables.Chain to string where the string is the chain line from the save (with counters etc).
 func getChainLines(table utiliptables.Table, save []byte) map[utiliptables.Chain]string {
-	// get lines
-	lines := strings.Split(string(save), "\n")
 	chainsMap := make(map[utiliptables.Chain]string)
 	tablePrefix := "*" + string(table)
-	lineNum := 0
+	readIndex := 0
 	// find beginning of table
-	for ; lineNum < len(lines); lineNum++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[lineNum]), tablePrefix) {
-			lineNum++
+	for readIndex < len(save) {
+		line, n := readLine(readIndex, save)
+		readIndex = n
+		if strings.HasPrefix(line, tablePrefix) {
 			break
 		}
 	}
 	// parse table lines
-	for ; lineNum < len(lines); lineNum++ {
-		line := strings.TrimSpace(lines[lineNum])
+	for readIndex < len(save) {
+		line, n := readLine(readIndex, save)
+		readIndex = n
+		if len(line) == 0 {
+			continue
+		}
 		if strings.HasPrefix(line, "COMMIT") || strings.HasPrefix(line, "*") {
 			break
-		} else if len(line) == 0 || strings.HasPrefix(line, "#") {
+		} else if strings.HasPrefix(line, "#") {
 			continue
 		} else if strings.HasPrefix(line, ":") && len(line) > 1 {
 			chain := utiliptables.Chain(strings.SplitN(line[1:], " ", 2)[0])
-			chainsMap[chain] = lines[lineNum]
+			chainsMap[chain] = line
 		}
 	}
 	return chainsMap
+}
+
+func readLine(readIndex int, byteArray []byte) (string, int) {
+	currentReadIndex := readIndex
+
+	// consume left spaces
+	for currentReadIndex < len(byteArray) {
+		if byteArray[currentReadIndex] == ' ' {
+			currentReadIndex++
+		} else {
+			break
+		}
+	}
+
+	// leftTrimIndex stores the left index of the line after the line is left-trimmed
+	leftTrimIndex := currentReadIndex
+
+	// rightTrimIndex stores the right index of the line after the line is right-trimmed
+	// it is set to -1 since the correct value has not yet been determined.
+	rightTrimIndex := -1
+
+	for ; currentReadIndex < len(byteArray); currentReadIndex++ {
+		if byteArray[currentReadIndex] == ' ' {
+			// set rightTrimIndex
+			if rightTrimIndex == -1 {
+				rightTrimIndex = currentReadIndex
+			}
+		} else if (byteArray[currentReadIndex] == '\n') || (currentReadIndex == (len(byteArray) - 1)) {
+			// end of line or byte buffer is reached
+			if currentReadIndex <= leftTrimIndex {
+				return "", currentReadIndex + 1
+			}
+			// set the rightTrimIndex
+			if rightTrimIndex == -1 {
+				rightTrimIndex = currentReadIndex
+				if currentReadIndex == (len(byteArray)-1) && (byteArray[currentReadIndex] != '\n') {
+					// ensure that the last character is part of the returned string,
+					// unless the last character is '\n'
+					rightTrimIndex = currentReadIndex + 1
+				}
+			}
+			return string(byteArray[leftTrimIndex:rightTrimIndex]), currentReadIndex + 1
+		} else {
+			// unset rightTrimIndex
+			rightTrimIndex = -1
+		}
+	}
+	return "", currentReadIndex
 }
 
 func isLocalIP(ip string) (bool, error) {

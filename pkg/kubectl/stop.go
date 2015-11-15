@@ -21,12 +21,14 @@ import (
 	"strings"
 	"time"
 
-	fuzz "github.com/google/gofuzz"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/meta"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/util"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
 
@@ -101,7 +103,7 @@ type objInterface interface {
 
 // getOverlappingControllers finds rcs that this controller overlaps, as well as rcs overlapping this controller.
 func getOverlappingControllers(c client.ReplicationControllerInterface, rc *api.ReplicationController) ([]api.ReplicationController, error) {
-	rcs, err := c.List(labels.Everything())
+	rcs, err := c.List(labels.Everything(), fields.Everything())
 	if err != nil {
 		return nil, fmt.Errorf("error getting replication controllers: %v", err)
 	}
@@ -183,38 +185,28 @@ func (reaper *ReplicationControllerReaper) Stop(namespace, name string, timeout 
 }
 
 func (reaper *DaemonSetReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
-	daemon, err := reaper.Experimental().DaemonSets(namespace).Get(name)
+	ds, err := reaper.Extensions().DaemonSets(namespace).Get(name)
 	if err != nil {
 		return "", err
 	}
 
-	// Update the daemon set to select for a non-existent NodeName.
-	// The daemon set controller will then kill all the daemon pods corresponding to daemon set.
-	nodes, err := reaper.Nodes().List(labels.Everything(), fields.Everything())
-	if err != nil {
+	// We set the nodeSelector to a random label. This label is nearly guaranteed
+	// to not be set on any node so the DameonSetController will start deleting
+	// daemon pods. Once it's done deleting the daemon pods, it's safe to delete
+	// the DaemonSet.
+	ds.Spec.Template.Spec.NodeSelector = map[string]string{
+		string(util.NewUUID()): string(util.NewUUID()),
+	}
+	// force update to avoid version conflict
+	ds.ResourceVersion = ""
+
+	if ds, err = reaper.Extensions().DaemonSets(namespace).Update(ds); err != nil {
 		return "", err
 	}
-	var fuzzer = fuzz.New()
-	var nameExists bool
-
-	var nodeName string
-	fuzzer.Fuzz(&nodeName)
-	nameExists = false
-	for _, node := range nodes.Items {
-		nameExists = nameExists || node.Name == nodeName
-	}
-	if nameExists {
-		// Probability of reaching here is extremely low, most likely indicates a programming bug/library error.
-		return "", fmt.Errorf("Name collision generating an unused node name. Please retry this operation.")
-	}
-
-	daemon.Spec.Template.Spec.NodeName = nodeName
-
-	reaper.Experimental().DaemonSets(namespace).Update(daemon)
 
 	// Wait for the daemon set controller to kill all the daemon pods.
 	if err := wait.Poll(reaper.pollInterval, reaper.timeout, func() (bool, error) {
-		updatedDS, err := reaper.Experimental().DaemonSets(namespace).Get(name)
+		updatedDS, err := reaper.Extensions().DaemonSets(namespace).Get(name)
 		if err != nil {
 			return false, nil
 		}
@@ -223,14 +215,15 @@ func (reaper *DaemonSetReaper) Stop(namespace, name string, timeout time.Duratio
 		return "", err
 	}
 
-	if err := reaper.Experimental().DaemonSets(namespace).Delete(name); err != nil {
+	if err := reaper.Extensions().DaemonSets(namespace).Delete(name); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("%s stopped", name), nil
 }
 
 func (reaper *JobReaper) Stop(namespace, name string, timeout time.Duration, gracePeriod *api.DeleteOptions) (string, error) {
-	jobs := reaper.Experimental().Jobs(namespace)
+	jobs := reaper.Extensions().Jobs(namespace)
+	pods := reaper.Pods(namespace)
 	scaler, err := ScalerFor("Job", *reaper)
 	if err != nil {
 		return "", err
@@ -251,6 +244,22 @@ func (reaper *JobReaper) Stop(namespace, name string, timeout time.Duration, gra
 	if err = scaler.Scale(namespace, name, 0, nil, retry, waitForJobs); err != nil {
 		return "", err
 	}
+	// at this point only dead pods are left, that should be removed
+	selector, _ := extensions.PodSelectorAsSelector(job.Spec.Selector)
+	podList, err := pods.List(selector, fields.Everything())
+	if err != nil {
+		return "", err
+	}
+	errList := []error{}
+	for _, pod := range podList.Items {
+		if err := pods.Delete(pod.Name, gracePeriod); err != nil {
+			errList = append(errList, err)
+		}
+	}
+	if len(errList) > 0 {
+		return "", utilerrors.NewAggregate(errList)
+	}
+	// once we have all the pods removed we can safely remove the job itself
 	if err := jobs.Delete(name, gracePeriod); err != nil {
 		return "", err
 	}

@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package aws_cloud
+package aws
 
 import (
 	"fmt"
@@ -111,6 +111,8 @@ type FakeAWSServices struct {
 	privateDnsName          string
 	networkInterfacesMacs   []string
 	networkInterfacesVpcIDs []string
+	internalIP              string
+	externalIP              string
 
 	ec2      *FakeEC2
 	elb      *FakeELB
@@ -247,7 +249,9 @@ func TestNewAWSCloud(t *testing.T) {
 }
 
 type FakeEC2 struct {
-	aws *FakeAWSServices
+	aws                  *FakeAWSServices
+	Subnets              []*ec2.Subnet
+	DescribeSubnetsInput *ec2.DescribeSubnetsInput
 }
 
 func contains(haystack []*string, needle string) bool {
@@ -321,6 +325,10 @@ func (self *FakeMetadata) GetMetadata(key string) (string, error) {
 		return self.aws.instanceId, nil
 	} else if key == "local-hostname" {
 		return self.aws.privateDnsName, nil
+	} else if key == "local-ipv4" {
+		return self.aws.internalIP, nil
+	} else if key == "public-ipv4" {
+		return self.aws.externalIP, nil
 	} else if strings.HasPrefix(key, networkInterfacesPrefix) {
 		if key == networkInterfacesPrefix {
 			return strings.Join(self.aws.networkInterfacesMacs, "/\n") + "/\n", nil
@@ -341,7 +349,7 @@ func (self *FakeMetadata) GetMetadata(key string) (string, error) {
 	}
 }
 
-func (ec2 *FakeEC2) AttachVolume(volumeID, instanceId, mountDevice string) (resp *ec2.VolumeAttachment, err error) {
+func (ec2 *FakeEC2) AttachVolume(request *ec2.AttachVolumeInput) (resp *ec2.VolumeAttachment, err error) {
 	panic("Not implemented")
 }
 
@@ -357,7 +365,7 @@ func (ec2 *FakeEC2) CreateVolume(request *ec2.CreateVolumeInput) (resp *ec2.Volu
 	panic("Not implemented")
 }
 
-func (ec2 *FakeEC2) DeleteVolume(volumeID string) (resp *ec2.DeleteVolumeOutput, err error) {
+func (ec2 *FakeEC2) DeleteVolume(request *ec2.DeleteVolumeInput) (resp *ec2.DeleteVolumeOutput, err error) {
 	panic("Not implemented")
 }
 
@@ -381,12 +389,9 @@ func (ec2 *FakeEC2) RevokeSecurityGroupIngress(*ec2.RevokeSecurityGroupIngressIn
 	panic("Not implemented")
 }
 
-func (ec2 *FakeEC2) DescribeVPCs(*ec2.DescribeVpcsInput) ([]*ec2.Vpc, error) {
-	panic("Not implemented")
-}
-
-func (ec2 *FakeEC2) DescribeSubnets(*ec2.DescribeSubnetsInput) ([]*ec2.Subnet, error) {
-	panic("Not implemented")
+func (ec2 *FakeEC2) DescribeSubnets(request *ec2.DescribeSubnetsInput) ([]*ec2.Subnet, error) {
+	ec2.DescribeSubnetsInput = request
+	return ec2.Subnets, nil
 }
 
 func (ec2 *FakeEC2) CreateTags(*ec2.CreateTagsInput) (*ec2.CreateTagsOutput, error) {
@@ -468,19 +473,18 @@ func (a *FakeASG) DescribeAutoScalingGroups(*autoscaling.DescribeAutoScalingGrou
 	panic("Not implemented")
 }
 
-func mockInstancesResp(instances []*ec2.Instance) *AWSCloud {
+func mockInstancesResp(instances []*ec2.Instance) (*AWSCloud, *FakeAWSServices) {
 	awsServices := NewFakeAWSServices().withInstances(instances)
 	return &AWSCloud{
-		awsServices:      awsServices,
 		ec2:              awsServices.ec2,
 		availabilityZone: awsServices.availabilityZone,
-	}
+		metadata:         &FakeMetadata{aws: awsServices},
+	}, awsServices
 }
 
 func mockAvailabilityZone(region string, availabilityZone string) *AWSCloud {
 	awsServices := NewFakeAWSServices().withAz(availabilityZone)
 	return &AWSCloud{
-		awsServices:      awsServices,
 		ec2:              awsServices.ec2,
 		availabilityZone: awsServices.availabilityZone,
 		region:           region,
@@ -547,7 +551,7 @@ func TestList(t *testing.T) {
 	instance3.State = &state3
 
 	instances := []*ec2.Instance{&instance0, &instance1, &instance2, &instance3}
-	aws := mockInstancesResp(instances)
+	aws, _ := mockInstancesResp(instances)
 
 	table := []struct {
 		input  string
@@ -607,19 +611,19 @@ func TestNodeAddresses(t *testing.T) {
 
 	instances := []*ec2.Instance{&instance0, &instance1}
 
-	aws1 := mockInstancesResp([]*ec2.Instance{})
+	aws1, _ := mockInstancesResp([]*ec2.Instance{})
 	_, err1 := aws1.NodeAddresses("instance-mismatch.ec2.internal")
 	if err1 == nil {
 		t.Errorf("Should error when no instance found")
 	}
 
-	aws2 := mockInstancesResp(instances)
+	aws2, _ := mockInstancesResp(instances)
 	_, err2 := aws2.NodeAddresses("instance-same.ec2.internal")
 	if err2 == nil {
 		t.Errorf("Should error when multiple instances found")
 	}
 
-	aws3 := mockInstancesResp(instances[0:1])
+	aws3, _ := mockInstancesResp(instances[0:1])
 	addrs3, err3 := aws3.NodeAddresses("instance-same.ec2.internal")
 	if err3 != nil {
 		t.Errorf("Should not error when instance found")
@@ -630,6 +634,18 @@ func TestNodeAddresses(t *testing.T) {
 	testHasNodeAddress(t, addrs3, api.NodeInternalIP, "192.168.0.1")
 	testHasNodeAddress(t, addrs3, api.NodeLegacyHostIP, "192.168.0.1")
 	testHasNodeAddress(t, addrs3, api.NodeExternalIP, "1.2.3.4")
+
+	aws4, fakeServices := mockInstancesResp([]*ec2.Instance{})
+	fakeServices.externalIP = "2.3.4.5"
+	fakeServices.internalIP = "192.168.0.2"
+	aws4.selfAWSInstance = &awsInstance{nodeName: fakeServices.instanceId}
+
+	addrs4, err4 := aws4.NodeAddresses(fakeServices.instanceId)
+	if err4 != nil {
+		t.Errorf("unexpected error: %v", err4)
+	}
+	testHasNodeAddress(t, addrs4, api.NodeInternalIP, "192.168.0.2")
+	testHasNodeAddress(t, addrs4, api.NodeExternalIP, "2.3.4.5")
 }
 
 func TestGetRegion(t *testing.T) {
@@ -696,4 +712,90 @@ func TestLoadBalancerMatchesClusterRegion(t *testing.T) {
 	if err == nil || err.Error() != errorMessage {
 		t.Errorf("Expected UpdateTCPLoadBalancer region mismatch error.")
 	}
+}
+
+func constructSubnets(subnetsIn map[int]map[string]string) (subnetsOut []*ec2.Subnet) {
+	for i := range subnetsIn {
+		subnetsOut = append(
+			subnetsOut,
+			constructSubnet(
+				subnetsIn[i]["id"],
+				subnetsIn[i]["az"],
+			),
+		)
+	}
+	return
+}
+
+func constructSubnet(id string, az string) *ec2.Subnet {
+	return &ec2.Subnet{
+		SubnetId:         &id,
+		AvailabilityZone: &az,
+	}
+}
+
+func TestSubnetIDsinVPC(t *testing.T) {
+	awsServices := NewFakeAWSServices()
+	c, err := newAWSCloud(strings.NewReader("[global]"), awsServices)
+	if err != nil {
+		t.Errorf("Error building aws cloud: %v", err)
+		return
+	}
+
+	vpcID := "vpc-deadbeef"
+
+	// test with 3 subnets from 3 different AZs
+	subnets := make(map[int]map[string]string)
+	subnets[0] = make(map[string]string)
+	subnets[0]["id"] = "subnet-a0000001"
+	subnets[0]["az"] = "af-south-1a"
+	subnets[1] = make(map[string]string)
+	subnets[1]["id"] = "subnet-b0000001"
+	subnets[1]["az"] = "af-south-1b"
+	subnets[2] = make(map[string]string)
+	subnets[2]["id"] = "subnet-c0000001"
+	subnets[2]["az"] = "af-south-1c"
+	awsServices.ec2.Subnets = constructSubnets(subnets)
+
+	result, err := c.listSubnetIDsinVPC(vpcID)
+	if err != nil {
+		t.Errorf("Error listing subnets: %v", err)
+		return
+	}
+
+	if len(result) != 3 {
+		t.Errorf("Expected 3 subnets but got %d", len(result))
+		return
+	}
+
+	result_set := make(map[string]bool)
+	for _, v := range result {
+		result_set[v] = true
+	}
+
+	for i := range subnets {
+		if !result_set[subnets[i]["id"]] {
+			t.Errorf("Expected subnet%d '%s' in result: %v", i, subnets[i]["id"], result)
+			return
+		}
+	}
+
+	// test with 4 subnets from 3 different AZs
+	// add duplicate az subnet
+	subnets[3] = make(map[string]string)
+	subnets[3]["id"] = "subnet-c0000002"
+	subnets[3]["az"] = "af-south-1c"
+	awsServices.ec2.Subnets = constructSubnets(subnets)
+
+	result, err = c.listSubnetIDsinVPC(vpcID)
+	if err != nil {
+		t.Errorf("Error listing subnets: %v", err)
+		return
+	}
+
+	if len(result) != 3 {
+		t.Errorf("Expected 3 subnets but got %d", len(result))
+		return
+	}
+
 }

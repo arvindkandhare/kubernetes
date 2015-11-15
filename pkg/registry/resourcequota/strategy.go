@@ -62,6 +62,10 @@ func (resourcequotaStrategy) Validate(ctx api.Context, obj runtime.Object) field
 	return validation.ValidateResourceQuota(resourcequota)
 }
 
+// Canonicalize normalizes the object after validation.
+func (resourcequotaStrategy) Canonicalize(obj runtime.Object) {
+}
+
 // AllowCreateOnUpdate is false for resourcequotas.
 func (resourcequotaStrategy) AllowCreateOnUpdate() bool {
 	return false
@@ -107,7 +111,5 @@ func MatchResourceQuota(label labels.Selector, field fields.Selector) generic.Ma
 
 // ResourceQuotaToSelectableFields returns a label set that represents the object
 func ResourceQuotaToSelectableFields(resourcequota *api.ResourceQuota) labels.Set {
-	return labels.Set{
-		"metadata.name": resourcequota.Name,
-	}
+	return labels.Set(generic.ObjectMetaFieldsSet(resourcequota.ObjectMeta, true))
 }

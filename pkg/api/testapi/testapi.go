@@ -24,7 +24,8 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	_ "k8s.io/kubernetes/pkg/api/install"
-	_ "k8s.io/kubernetes/pkg/apis/experimental/install"
+	_ "k8s.io/kubernetes/pkg/apis/extensions/install"
+	_ "k8s.io/kubernetes/pkg/apis/metrics/install"
 
 	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/meta"
@@ -33,9 +34,9 @@ import (
 )
 
 var (
-	Groups       = make(map[string]TestGroup)
-	Default      TestGroup
-	Experimental TestGroup
+	Groups     = make(map[string]TestGroup)
+	Default    TestGroup
+	Extensions TestGroup
 )
 
 type TestGroup struct {
@@ -66,12 +67,12 @@ func init() {
 		// have multiple group support
 		Groups[""] = TestGroup{"", latest.GroupOrDie("").Version, latest.GroupOrDie("").GroupVersion}
 	}
-	if _, ok := Groups["experimental"]; !ok {
-		Groups["experimental"] = TestGroup{"experimental", latest.GroupOrDie("experimental").Version, latest.GroupOrDie("experimental").GroupVersion}
+	if _, ok := Groups["extensions"]; !ok {
+		Groups["extensions"] = TestGroup{"extensions", latest.GroupOrDie("extensions").Version, latest.GroupOrDie("extensions").GroupVersion}
 	}
 
 	Default = Groups[""]
-	Experimental = Groups["experimental"]
+	Extensions = Groups["extensions"]
 }
 
 // Version returns the API version to test against, as set by the KUBE_TEST_API env var.
@@ -90,21 +91,11 @@ func (g TestGroup) GroupAndVersion() string {
 // KUBE_TEST_API env var.
 func (g TestGroup) Codec() runtime.Codec {
 	// TODO: caesarxuchao: Restructure the body once we have a central `latest`.
-	if g.Group == "" {
-		interfaces, err := latest.GroupOrDie("").InterfacesFor(g.GroupVersionUnderTest)
-		if err != nil {
-			panic(err)
-		}
-		return interfaces.Codec
+	interfaces, err := latest.GroupOrDie(g.Group).InterfacesFor(g.GroupVersionUnderTest)
+	if err != nil {
+		panic(err)
 	}
-	if g.Group == "experimental" {
-		interfaces, err := latest.GroupOrDie("experimental").InterfacesFor(g.GroupVersionUnderTest)
-		if err != nil {
-			panic(err)
-		}
-		return interfaces.Codec
-	}
-	panic(fmt.Errorf("cannot test group %s", g.Group))
+	return interfaces.Codec
 }
 
 // Converter returns the api.Scheme for the API version to test against, as set by the
@@ -118,8 +109,8 @@ func (g TestGroup) Converter() runtime.ObjectConvertor {
 		}
 		return interfaces.ObjectConvertor
 	}
-	if g.Group == "experimental" {
-		interfaces, err := latest.GroupOrDie("experimental").InterfacesFor(g.VersionUnderTest)
+	if g.Group == "extensions" {
+		interfaces, err := latest.GroupOrDie("extensions").InterfacesFor(g.VersionUnderTest)
 		if err != nil {
 			panic(err)
 		}
@@ -140,8 +131,8 @@ func (g TestGroup) MetadataAccessor() meta.MetadataAccessor {
 		}
 		return interfaces.MetadataAccessor
 	}
-	if g.Group == "experimental" {
-		interfaces, err := latest.GroupOrDie("experimental").InterfacesFor(g.VersionUnderTest)
+	if g.Group == "extensions" {
+		interfaces, err := latest.GroupOrDie("extensions").InterfacesFor(g.VersionUnderTest)
 		if err != nil {
 			panic(err)
 		}
@@ -224,6 +215,10 @@ func GetCodecForObject(obj runtime.Object) (runtime.Codec, error) {
 		if api.Scheme.Recognizes(group.GroupAndVersion(), kind) {
 			return group.Codec(), nil
 		}
+	}
+	// Codec used for unversioned types
+	if api.Scheme.Recognizes("", kind) {
+		return api.Codec, nil
 	}
 	return nil, fmt.Errorf("unexpected kind: %v", kind)
 }

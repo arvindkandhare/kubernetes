@@ -17,6 +17,7 @@ limitations under the License.
 package unversioned
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -33,6 +34,7 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/latest"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/sets"
@@ -100,6 +102,9 @@ type KubeletConfig struct {
 	// TLSClientConfig contains settings to enable transport layer security
 	TLSClientConfig
 
+	// Server requires Bearer authentication
+	BearerToken string
+
 	// HTTPTimeout is used by the client to timeout http requests to Kubelet.
 	HTTPTimeout time.Duration
 
@@ -141,15 +146,22 @@ func New(c *Config) (*Client, error) {
 		return nil, err
 	}
 
-	if _, err := latest.Group("experimental"); err != nil {
-		return &Client{RESTClient: client, ExperimentalClient: nil}, nil
-	}
-	experimentalConfig := *c
-	experimentalClient, err := NewExperimental(&experimentalConfig)
+	discoveryConfig := *c
+	discoveryClient, err := NewDiscoveryClient(&discoveryConfig)
 	if err != nil {
 		return nil, err
 	}
-	return &Client{RESTClient: client, ExperimentalClient: experimentalClient}, nil
+
+	if _, err := latest.Group("extensions"); err != nil {
+		return &Client{RESTClient: client, ExtensionsClient: nil, DiscoveryClient: discoveryClient}, nil
+	}
+	experimentalConfig := *c
+	experimentalClient, err := NewExtensions(&experimentalConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{RESTClient: client, ExtensionsClient: experimentalClient, DiscoveryClient: discoveryClient}, nil
 }
 
 // MatchesServerVersion queries the server to compares the build version
@@ -175,6 +187,65 @@ func MatchesServerVersion(client *Client, c *Config) error {
 	return nil
 }
 
+func ExtractGroupVersions(l *unversioned.APIGroupList) []string {
+	var groupVersions []string
+	for _, g := range l.Groups {
+		for _, gv := range g.Versions {
+			groupVersions = append(groupVersions, gv.GroupVersion)
+		}
+	}
+	return groupVersions
+}
+
+// ServerAPIVersions returns the GroupVersions supported by the API server.
+// It creates a RESTClient based on the passed in config, but it doesn't rely
+// on the Version, Codec, and Prefix of the config, because it uses AbsPath and
+// takes the raw response.
+func ServerAPIVersions(c *Config) (groupVersions []string, err error) {
+	transport, err := TransportFor(c)
+	if err != nil {
+		return nil, err
+	}
+	client := http.Client{Transport: transport}
+
+	configCopy := *c
+	configCopy.Version = ""
+	configCopy.Prefix = ""
+	baseURL, err := defaultServerUrlFor(c)
+	if err != nil {
+		return nil, err
+	}
+	// Get the groupVersions exposed at /api
+	baseURL.Path = "/api"
+	resp, err := client.Get(baseURL.String())
+	if err != nil {
+		return nil, err
+	}
+	var v unversioned.APIVersions
+	defer resp.Body.Close()
+	err = json.NewDecoder(resp.Body).Decode(&v)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error: %v", err)
+	}
+
+	groupVersions = append(groupVersions, v.Versions...)
+	// Get the groupVersions exposed at /apis
+	baseURL.Path = "/apis"
+	resp2, err := client.Get(baseURL.String())
+	if err != nil {
+		return nil, err
+	}
+	var apiGroupList unversioned.APIGroupList
+	defer resp2.Body.Close()
+	err = json.NewDecoder(resp2.Body).Decode(&apiGroupList)
+	if err != nil {
+		return nil, fmt.Errorf("unexpected error: %v", err)
+	}
+	groupVersions = append(groupVersions, ExtractGroupVersions(&apiGroupList)...)
+
+	return groupVersions, nil
+}
+
 // NegotiateVersion queries the server's supported api versions to find
 // a version that both client and server support.
 // - If no version is provided, try registered client versions in order of
@@ -198,7 +269,9 @@ func NegotiateVersion(client *Client, c *Config, version string, clientRegistere
 	}
 	apiVersions, err := client.ServerAPIVersions()
 	if err != nil {
-		return "", fmt.Errorf("couldn't read version from server: %v", err)
+		// This is almost always a connection error, and higher level code should treat this as a generic error,
+		// not a negotiation specific error.
+		return "", err
 	}
 	serverVersions := sets.String{}
 	for _, v := range apiVersions.Versions {
@@ -212,7 +285,7 @@ func NegotiateVersion(client *Client, c *Config, version string, clientRegistere
 	// If server does not support warn, but try to negotiate a lower version.
 	if len(version) != 0 {
 		if !clientVersions.Has(version) {
-			return "", fmt.Errorf("Client does not support API version '%s'. Client supported API versions: %v", version, clientVersions)
+			return "", fmt.Errorf("client does not support API version %q; client supported API versions: %v", version, clientVersions)
 
 		}
 		if serverVersions.Has(version) {
@@ -220,7 +293,7 @@ func NegotiateVersion(client *Client, c *Config, version string, clientRegistere
 		}
 		// If we are using an explicit config version the server does not support, fail.
 		if version == c.Version {
-			return "", fmt.Errorf("Server does not support API version '%s'.", version)
+			return "", fmt.Errorf("server does not support API version %q", version)
 		}
 	}
 
@@ -236,7 +309,7 @@ func NegotiateVersion(client *Client, c *Config, version string, clientRegistere
 			return clientVersion, nil
 		}
 	}
-	return "", fmt.Errorf("Failed to negotiate an api version. Server supports: %v. Client supports: %v.",
+	return "", fmt.Errorf("failed to negotiate an api version; server supports: %v, client supports: %v",
 		serverVersions, clientRegisteredVersions)
 }
 
@@ -254,6 +327,11 @@ func NewOrDie(c *Config) *Client {
 // running inside a pod running on kuberenetes. It will return an error if
 // called from a process not running in a kubernetes environment.
 func InClusterConfig() (*Config, error) {
+	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	if len(host) == 0 || len(port) == 0 {
+		return nil, fmt.Errorf("unable to load in-cluster configuration, KUBERNETES_SERVICE_HOST and KUBERNETES_SERVICE_PORT must be defined")
+	}
+
 	token, err := ioutil.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/" + api.ServiceAccountTokenKey)
 	if err != nil {
 		return nil, err
@@ -268,7 +346,7 @@ func InClusterConfig() (*Config, error) {
 
 	return &Config{
 		// TODO: switch to using cluster DNS.
-		Host:            "https://" + net.JoinHostPort(os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")),
+		Host:            "https://" + net.JoinHostPort(host, port),
 		BearerToken:     string(token),
 		TLSClientConfig: tlsClientConfig,
 	}, nil
@@ -285,6 +363,7 @@ func NewInCluster() (*Client, error) {
 
 // SetKubernetesDefaults sets default values on the provided client config for accessing the
 // Kubernetes API or returns an error if any of the defaults are impossible or invalid.
+// TODO: this method needs to be split into one that sets defaults per group, expected to be fix in PR "Refactoring clientcache.go and helper.go #14592"
 func SetKubernetesDefaults(config *Config) error {
 	if config.Prefix == "" {
 		config.Prefix = "/api"
@@ -320,6 +399,31 @@ func RESTClientFor(config *Config) (*RESTClient, error) {
 	if len(config.Version) == 0 {
 		return nil, fmt.Errorf("version is required when initializing a RESTClient")
 	}
+	if config.Codec == nil {
+		return nil, fmt.Errorf("Codec is required when initializing a RESTClient")
+	}
+
+	baseURL, err := defaultServerUrlFor(config)
+	if err != nil {
+		return nil, err
+	}
+
+	client := NewRESTClient(baseURL, config.Version, config.Codec, config.QPS, config.Burst)
+
+	transport, err := TransportFor(config)
+	if err != nil {
+		return nil, err
+	}
+
+	if transport != http.DefaultTransport {
+		client.Client = &http.Client{Transport: transport}
+	}
+	return client, nil
+}
+
+// UnversionedRESTClientFor is the same as RESTClientFor, except that it allows
+// the config.Version to be empty.
+func UnversionedRESTClientFor(config *Config) (*RESTClient, error) {
 	if config.Codec == nil {
 		return nil, fmt.Errorf("Codec is required when initializing a RESTClient")
 	}
@@ -380,15 +484,9 @@ func tlsTransportFor(config *Config) (http.RoundTripper, error) {
 	}
 
 	// Cache a single transport for these options
-	tlsTransports[key] = &http.Transport{
+	tlsTransports[key] = util.SetTransportDefaults(&http.Transport{
 		TLSClientConfig: tlsConfig,
-		Proxy:           http.ProxyFromEnvironment,
-		Dial: (&net.Dialer{
-			Timeout:   30 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).Dial,
-		TLSHandshakeTimeout: 10 * time.Second,
-	}
+	})
 	return tlsTransports[key], nil
 }
 
@@ -472,9 +570,6 @@ func HTTPWrappersForConfig(config *Config, rt http.RoundTripper) (http.RoundTrip
 func DefaultServerURL(host, prefix, version string, defaultTLS bool) (*url.URL, error) {
 	if host == "" {
 		return nil, fmt.Errorf("host must be a URL or a host:port pair")
-	}
-	if version == "" {
-		return nil, fmt.Errorf("version must be set")
 	}
 	base := host
 	hostURL, err := url.Parse(base)
@@ -567,4 +662,13 @@ func DefaultKubernetesUserAgent() string {
 	seg := strings.SplitN(version, "-", 2)
 	version = seg[0]
 	return fmt.Sprintf("%s/%s (%s/%s) kubernetes/%s", path.Base(os.Args[0]), version, gruntime.GOOS, gruntime.GOARCH, commit)
+}
+
+// TimeoutFromListOptions returns timeout to be set via TimeoutSeconds() method
+// based on given options.
+func TimeoutFromListOptions(options api.ListOptions) time.Duration {
+	if options.TimeoutSeconds != nil {
+		return time.Duration(*options.TimeoutSeconds) * time.Second
+	}
+	return 0
 }

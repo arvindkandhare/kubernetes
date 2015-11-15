@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/salt.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/salt.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -82,7 +82,7 @@ An example file is presented below using the Vagrant based environment.
 [root@kubernetes-master] $ cat /etc/salt/minion.d/grains.conf
 grains:
   etcd_servers: $MASTER_IP
-  cloud_provider: vagrant
+  cloud: vagrant
   roles:
     - kubernetes-master
 ```

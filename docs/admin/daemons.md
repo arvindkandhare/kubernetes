@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/admin/daemons.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/admin/daemons.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -77,8 +77,8 @@ but with different flags and/or different memory and cpu requests for different 
 ### Required Fields
 
 As with all other Kubernetes config, a DaemonSet needs `apiVersion`, `kind`, and `metadata` fields.  For
-general information about working with config files, see [here](../user-guide/simple-yaml.md),
-[here](../user-guide/configuring-containers.md), and [here](../user-guide/working-with-resources.md).
+general information about working with config files, see [deploying applications](../user-guide/deploying-applications.md),
+[configuring containers](../user-guide/configuring-containers.md), and [working with resources](../user-guide/working-with-resources.md) documents.
 
 A DaemonSet also needs a [`.spec`](../devel/api-conventions.md#spec-and-status) section.
 
@@ -209,9 +209,16 @@ all or certain hosts, and when it needs to start before other pods.
 
 ## Caveats
 
-DaemonSet is part of the experimental API group, so it is not subject to the same compatibility
-guarantees as objects in the main API.  It may not be enabled.  Enable by setting
-`--runtime-config=experimental/v1alpha1` on the apiserver.
+DaemonSet objects are in the [`extensions` API Group](../api.md#api-groups).
+DaemonSet is not enabled by default. Enable it by setting
+`--runtime-config=extensions/v1beta1/daemonsets=true` on the api server. This can be
+achieved by exporting KUBE_ENABLE_DAEMONSETS=true before running kube-up.sh script
+on GCE.
+
+DaemonSet objects effectively have [API version `v1alpha1`](../api.md#api-versioning).
+ Alpha objects may change or even be discontinued in future software releases.
+However, due to to a known issue, they will appear as API version `v1beta1` if enabled.
+
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

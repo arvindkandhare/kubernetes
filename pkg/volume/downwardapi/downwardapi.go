@@ -29,7 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/fieldpath"
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
-	utilErrors "k8s.io/kubernetes/pkg/util/errors"
+	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/volume"
 
 	"github.com/golang/glog"
@@ -107,6 +107,10 @@ type downwardAPIVolumeBuilder struct {
 // downwardAPIVolumeBuilder implements volume.Builder interface
 var _ volume.Builder = &downwardAPIVolumeBuilder{}
 
+func (_ *downwardAPIVolumeBuilder) SupportsOwnershipManagement() bool {
+	return false
+}
+
 // SetUp puts in place the volume plugin.
 // This function is not idempotent by design. We want the data to be refreshed periodically.
 // The internal sync interval of kubelet will drive the refresh of data.
@@ -148,8 +152,12 @@ func (b *downwardAPIVolumeBuilder) SetUpAt(dir string) error {
 	return nil
 }
 
-// IsReadOnly func to fullfill volume.Builder interface
+// IsReadOnly func to fulfill volume.Builder interface
 func (d *downwardAPIVolume) IsReadOnly() bool {
+	return true
+}
+
+func (d *downwardAPIVolume) SupportsSELinux() bool {
 	return true
 }
 
@@ -167,10 +175,10 @@ func (d *downwardAPIVolume) collectData() (map[string]string, error) {
 			data[fileName] = sortLines(values)
 		}
 	}
-	return data, utilErrors.NewAggregate(errlist)
+	return data, utilerrors.NewAggregate(errlist)
 }
 
-// isDataChanged iterate over all the entries to check wether at least one
+// isDataChanged iterate over all the entries to check whether at least one
 // file needs to be updated.
 func (d *downwardAPIVolume) isDataChanged(data map[string]string) bool {
 	for fileName, values := range data {
@@ -283,7 +291,7 @@ func (d *downwardAPIVolume) writeDataInTimestampDir(data map[string]string) (str
 			errlist = append(errlist, err)
 		}
 	}
-	return timestampDir, utilErrors.NewAggregate(errlist)
+	return timestampDir, utilerrors.NewAggregate(errlist)
 }
 
 // updateSymlinksToCurrentDir creates the relative symlinks for all the files configured in this volume.

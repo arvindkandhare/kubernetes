@@ -109,7 +109,7 @@ func TestClient(t *testing.T) {
 }
 
 func TestSingleWatch(t *testing.T) {
-	_, s := runAMaster(t)
+	_, s := framework.RunAMaster(t)
 	defer s.Close()
 
 	ns := "blargh"
@@ -247,7 +247,7 @@ func TestMultiWatch(t *testing.T) {
 			w, err := client.Pods(ns).Watch(
 				labels.Set{"watchlabel": name}.AsSelector(),
 				fields.Everything(),
-				rv,
+				api.ListOptions{ResourceVersion: rv},
 			)
 			if err != nil {
 				panic(fmt.Sprintf("watch error for %v: %v", name, err))

@@ -11,12 +11,15 @@ metadata:
 spec:
   containers:
     - name: vttablet
-      image: vitess/lite:v2.0
+      image: vitess/lite:v2.0.0-alpha5
       volumeMounts:
         - name: syslog
           mountPath: /dev/log
         - name: vtdataroot
           mountPath: /vt/vtdataroot
+        - name: certs
+          readOnly: true
+          mountPath: /etc/ssl/certs
       resources:
         limits:
           memory: "1Gi"
@@ -48,7 +51,8 @@ spec:
           -alsologtostderr
           -port {{port}}
           -grpc_port {{grpc_port}}
-          -service_map 'grpc-queryservice'
+          -service_map 'grpc-queryservice,grpc-tabletmanager,grpc-updatestream'
+          -binlog_player_protocol grpc
           -tablet-path {{alias}}
           -tablet_hostname $(hostname -i)
           -init_keyspace {{keyspace}}
@@ -69,9 +73,11 @@ spec:
           -db-config-filtered-charset utf8
           -enable-rowcache
           -rowcache-bin /usr/bin/memcached
-          -rowcache-socket $VTDATAROOT/{{tablet_subdir}}/memcache.sock" vitess
+          -rowcache-socket $VTDATAROOT/{{tablet_subdir}}/memcache.sock
+          -health_check_interval 5s
+          -restore_from_backup {{backup_flags}}" vitess
     - name: mysql
-      image: vitess/lite:v2.0
+      image: vitess/lite:v2.0.0-alpha5
       volumeMounts:
         - name: syslog
           mountPath: /dev/log
@@ -117,4 +123,6 @@ spec:
       hostPath: {path: /dev/log}
     - name: vtdataroot
       emptyDir: {}
+    - name: certs
+      hostPath: {path: /etc/ssl/certs}
 

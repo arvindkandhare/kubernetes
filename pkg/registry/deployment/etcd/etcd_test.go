@@ -21,34 +21,35 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/testapi"
-	"k8s.io/kubernetes/pkg/apis/experimental"
+	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 	"k8s.io/kubernetes/pkg/tools"
-	"k8s.io/kubernetes/pkg/tools/etcdtest"
 	"k8s.io/kubernetes/pkg/util"
 )
 
 func newStorage(t *testing.T) (*DeploymentStorage, *tools.FakeEtcdClient) {
-	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "experimental")
-	deploymentStorage := NewStorage(etcdStorage)
+	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "extensions")
+	deploymentStorage := NewStorage(etcdStorage, generic.UndecoratedStorage)
 	return &deploymentStorage, fakeClient
 }
 
 var namespace = "foo-namespace"
 var name = "foo-deployment"
 
-func validNewDeployment() *experimental.Deployment {
-	return &experimental.Deployment{
+func validNewDeployment() *extensions.Deployment {
+	return &extensions.Deployment{
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 		},
-		Spec: experimental.DeploymentSpec{
+		Spec: extensions.DeploymentSpec{
 			Selector: map[string]string{"a": "b"},
-			Template: &api.PodTemplateSpec{
+			Template: api.PodTemplateSpec{
 				ObjectMeta: api.ObjectMeta{
 					Labels: map[string]string{"a": "b"},
 				},
@@ -67,7 +68,7 @@ func validNewDeployment() *experimental.Deployment {
 			UniqueLabelKey: "my-label",
 			Replicas:       7,
 		},
-		Status: experimental.DeploymentStatus{
+		Status: extensions.DeploymentStatus{
 			Replicas: 5,
 		},
 	}
@@ -75,13 +76,13 @@ func validNewDeployment() *experimental.Deployment {
 
 var validDeployment = *validNewDeployment()
 
-func validNewScale() *experimental.Scale {
-	return &experimental.Scale{
+func validNewScale() *extensions.Scale {
+	return &extensions.Scale{
 		ObjectMeta: api.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: experimental.ScaleSpec{
+		Spec: extensions.ScaleSpec{
 			Replicas: validDeployment.Spec.Replicas,
 		},
-		Status: experimental.ScaleStatus{
+		Status: extensions.ScaleStatus{
 			Replicas: validDeployment.Status.Replicas,
 			Selector: validDeployment.Spec.Template.Labels,
 		},
@@ -99,8 +100,8 @@ func TestCreate(t *testing.T) {
 		// valid
 		deployment,
 		// invalid (invalid selector)
-		&experimental.Deployment{
-			Spec: experimental.DeploymentSpec{
+		&extensions.Deployment{
+			Spec: extensions.DeploymentSpec{
 				Selector: map[string]string{},
 				Template: validDeployment.Spec.Template,
 			},
@@ -116,28 +117,28 @@ func TestUpdate(t *testing.T) {
 		validNewDeployment(),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.Deployment)
+			object := obj.(*extensions.Deployment)
 			object.Spec.Template.Spec.NodeSelector = map[string]string{"c": "d"}
 			return object
 		},
 		// invalid updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.Deployment)
+			object := obj.(*extensions.Deployment)
 			object.UID = "newUID"
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.Deployment)
+			object := obj.(*extensions.Deployment)
 			object.Name = ""
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.Deployment)
+			object := obj.(*extensions.Deployment)
 			object.Spec.Template.Spec.RestartPolicy = api.RestartPolicyOnFailure
 			return object
 		},
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.Deployment)
+			object := obj.(*extensions.Deployment)
 			object.Spec.Selector = map[string]string{}
 			return object
 		},
@@ -191,13 +192,13 @@ func TestScaleGet(t *testing.T) {
 
 	ctx := api.WithNamespace(api.NewContext(), namespace)
 	key := etcdtest.AddPrefix("/deployments/" + namespace + "/" + name)
-	if _, err := fakeClient.Set(key, runtime.EncodeOrDie(testapi.Experimental.Codec(), &validDeployment), 0); err != nil {
+	if _, err := fakeClient.Set(key, runtime.EncodeOrDie(testapi.Extensions.Codec(), &validDeployment), 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	expect := &validScale
 	obj, err := storage.Scale.Get(ctx, name)
-	scale := obj.(*experimental.Scale)
+	scale := obj.(*extensions.Scale)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -211,13 +212,13 @@ func TestScaleUpdate(t *testing.T) {
 
 	ctx := api.WithNamespace(api.NewContext(), namespace)
 	key := etcdtest.AddPrefix("/deployments/" + namespace + "/" + name)
-	if _, err := fakeClient.Set(key, runtime.EncodeOrDie(testapi.Experimental.Codec(), &validDeployment), 0); err != nil {
+	if _, err := fakeClient.Set(key, runtime.EncodeOrDie(testapi.Extensions.Codec(), &validDeployment), 0); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	replicas := 12
-	update := experimental.Scale{
+	update := extensions.Scale{
 		ObjectMeta: api.ObjectMeta{Name: name, Namespace: namespace},
-		Spec: experimental.ScaleSpec{
+		Spec: extensions.ScaleSpec{
 			Replicas: replicas,
 		},
 	}
@@ -230,9 +231,45 @@ func TestScaleUpdate(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var deployment experimental.Deployment
-	testapi.Experimental.Codec().DecodeInto([]byte(response.Node.Value), &deployment)
+	var deployment extensions.Deployment
+	testapi.Extensions.Codec().DecodeInto([]byte(response.Node.Value), &deployment)
 	if deployment.Spec.Replicas != replicas {
 		t.Errorf("wrong replicas count expected: %d got: %d", replicas, deployment.Spec.Replicas)
+	}
+}
+
+func TestStatusUpdate(t *testing.T) {
+	storage, fakeClient := newStorage(t)
+
+	ctx := api.WithNamespace(api.NewContext(), namespace)
+	key := etcdtest.AddPrefix("/deployments/" + namespace + "/" + name)
+	if _, err := fakeClient.Set(key, runtime.EncodeOrDie(testapi.Extensions.Codec(), &validDeployment), 0); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	update := extensions.Deployment{
+		ObjectMeta: validDeployment.ObjectMeta,
+		Spec: extensions.DeploymentSpec{
+			Replicas: 100,
+		},
+		Status: extensions.DeploymentStatus{
+			Replicas: 100,
+		},
+	}
+
+	if _, _, err := storage.Status.Update(ctx, &update); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	response, err := fakeClient.Get(key, false, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var deployment extensions.Deployment
+	testapi.Extensions.Codec().DecodeInto([]byte(response.Node.Value), &deployment)
+	if deployment.Spec.Replicas != 7 {
+		t.Errorf("we expected .spec.replicas to not be updated but it was updated to %v", deployment.Spec.Replicas)
+	}
+	if deployment.Status.Replicas != 100 {
+		t.Errorf("we expected .status.replicas to be updated to 100 but it was %v", deployment.Status.Replicas)
 	}
 }

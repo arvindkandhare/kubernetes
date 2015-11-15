@@ -20,23 +20,24 @@ import (
 	"testing"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/apis/experimental"
-	// Ensure that experimental/v1alpha1 package is initialized.
-	_ "k8s.io/kubernetes/pkg/apis/experimental/v1alpha1"
+	"k8s.io/kubernetes/pkg/apis/extensions"
+	// Ensure that extensions/v1beta1 package is initialized.
+	_ "k8s.io/kubernetes/pkg/apis/extensions/v1beta1"
 	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
+	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/registry/registrytest"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/tools"
 )
 
 func newStorage(t *testing.T) (*REST, *tools.FakeEtcdClient) {
-	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "experimental")
-	return NewREST(etcdStorage, "foo", "bar"), fakeClient
+	etcdStorage, fakeClient := registrytest.NewEtcdStorage(t, "extensions")
+	return NewREST(etcdStorage, generic.UndecoratedStorage, "foo", "bar"), fakeClient
 }
 
-func validNewThirdPartyResourceData(name string) *experimental.ThirdPartyResourceData {
-	return &experimental.ThirdPartyResourceData{
+func validNewThirdPartyResourceData(name string) *extensions.ThirdPartyResourceData {
+	return &extensions.ThirdPartyResourceData{
 		ObjectMeta: api.ObjectMeta{
 			Name:      name,
 			Namespace: api.NamespaceDefault,
@@ -54,7 +55,7 @@ func TestCreate(t *testing.T) {
 		// valid
 		rsrc,
 		// invalid
-		&experimental.ThirdPartyResourceData{},
+		&extensions.ThirdPartyResourceData{},
 	)
 }
 
@@ -66,7 +67,7 @@ func TestUpdate(t *testing.T) {
 		validNewThirdPartyResourceData("foo"),
 		// updateFunc
 		func(obj runtime.Object) runtime.Object {
-			object := obj.(*experimental.ThirdPartyResourceData)
+			object := obj.(*extensions.ThirdPartyResourceData)
 			object.Data = []byte("new description")
 			return object
 		},

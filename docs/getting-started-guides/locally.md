@@ -19,8 +19,8 @@ If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
 <strong>
-The latest 1.0.x release of this document can be found
-[here](http://releases.k8s.io/release-1.0/docs/getting-started-guides/locally.md).
+The latest release of this document can be found
+[here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/locally.md).
 
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
@@ -157,7 +157,7 @@ hack/local-up-cluster.sh
 
 #### kubectl claims to start a container but `get pods` and `docker ps` don't show it.
 
-One or more of the KUbernetes daemons might've crashed. Tail the logs of each in /tmp.
+One or more of the Kubernetes daemons might've crashed. Tail the logs of each in /tmp.
 
 #### The pods fail to connect to the services by host names
 

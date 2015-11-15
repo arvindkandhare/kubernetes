@@ -54,6 +54,9 @@ func (strategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.Valida
 	return validation.ValidateSecret(obj.(*api.Secret))
 }
 
+func (strategy) Canonicalize(obj runtime.Object) {
+}
+
 func (strategy) AllowCreateOnUpdate() bool {
 	return false
 }
@@ -62,7 +65,7 @@ func (strategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
 func (strategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
-	return validation.ValidateSecretUpdate(old.(*api.Secret), obj.(*api.Secret))
+	return validation.ValidateSecretUpdate(obj.(*api.Secret), old.(*api.Secret))
 }
 
 func (strategy) AllowUnconditionalUpdate() bool {
