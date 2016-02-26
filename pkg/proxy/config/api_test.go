@@ -31,7 +31,7 @@ type fakeLW struct {
 	watchResp watch.Interface
 }
 
-func (lw fakeLW) List() (runtime.Object, error) {
+func (lw fakeLW) List(options api.ListOptions) (runtime.Object, error) {
 	return lw.listResp, nil
 }
 

@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/ubuntu.md).
@@ -51,6 +52,12 @@ in the given examples. You can scale to **any number of nodes** by changing some
 The original idea was heavily inspired by @jainvipin 's ubuntu single node
 work, which has been merge into this document.
 
+The scripting referenced here can be used to deploy Kubernetes with
+networking based either on Flannel or on a CNI plugin that you supply.
+This document is focused on the Flannel case.  See
+`kubernetes/cluster/ubuntu/config-default.sh` for remarks on how to
+use a CNI plugin instead.
+
 [Cloud team from Zhejiang University](https://github.com/ZJU-SEL) will maintain this work.
 
 ## Prerequisites
@@ -60,7 +67,7 @@ work, which has been merge into this document.
 Internet to download the necessary files, while worker nodes do not.
 3. These guide is tested OK on Ubuntu 14.04 LTS 64bit server, but it can not work with
 Ubuntu 15 which uses systemd instead of upstart.
-4. Dependencies of this guide: etcd-2.2.1, flannel-0.5.3, k8s-1.0.6, may work with higher versions.
+4. Dependencies of this guide: etcd-2.2.1, flannel-0.5.5, k8s-1.1.4, may work with higher versions.
 5. All the remote servers can be ssh logged in without a password by using key authentication.
 
 
@@ -77,7 +84,7 @@ $ git clone https://github.com/kubernetes/kubernetes.git
 #### Configure and start the Kubernetes cluster
 
 The startup process will first download all the required binaries automatically.
-By default etcd version is 2.2.1, flannel version is 0.5.3 and k8s version is 1.0.6.
+By default etcd version is 2.2.1, flannel version is 0.5.5 and k8s version is 1.1.4.
 You can customize your etcd version, flannel version, k8s version by changing corresponding variables
 `ETCD_VERSION` , `FLANNEL_VERSION` and `KUBE_VERSION` like following.
 
@@ -85,6 +92,17 @@ You can customize your etcd version, flannel version, k8s version by changing co
 $ export KUBE_VERSION=1.0.5
 $ export FLANNEL_VERSION=0.5.0
 $ export ETCD_VERSION=2.2.0
+```
+
+**Note**
+
+For users who want to bring up a cluster with k8s version v1.1.1, `controller manager` may fail to start
+due to [a known issue](https://github.com/kubernetes/kubernetes/issues/17109). You could raise it
+up manually by using following command on the remote master server. Note that
+you should do this only after `api-server` is up. Moreover this issue is fixed in v1.1.2 and later.
+
+```console
+$ sudo service kube-controller-manager start
 ```
 
 Note that we use flannel here to set up overlay network, yet it's optional. Actually you can build up k8s
@@ -105,7 +123,7 @@ export nodes="vcap@10.10.103.250 vcap@10.10.103.162 vcap@10.10.103.223"
 
 export role="ai i i"
 
-export NUM_MINIONS=${NUM_MINIONS:-3}
+export NUM_NODES=${NUM_NODES:-3}
 
 export SERVICE_CLUSTER_IP_RANGE=192.168.3.0/24
 
@@ -118,7 +136,7 @@ separated with blank space like `<user_1@ip_1> <user_2@ip_2> <user_3@ip_3> `
 Then the `role` variable defines the role of above machine in the same order, "ai" stands for machine
 acts as both master and node, "a" stands for master, "i" stands for node.
 
-The `NUM_MINIONS` variable defines the total number of nodes.
+The `NUM_NODES` variable defines the total number of nodes.
 
 The `SERVICE_CLUSTER_IP_RANGE` variable defines the kubernetes service IP range. Please make sure
 that you do have a valid private ip range defined here, because some IaaS provider may reserve private ips.
@@ -133,6 +151,8 @@ that conflicts with your own private network range.
 
 The `FLANNEL_NET` variable defines the IP range used for flannel overlay network,
 should not conflict with above `SERVICE_CLUSTER_IP_RANGE`.
+You can optionally provide additional Flannel network configuration
+through `FLANNEL_OTHER_NET_CONFIG`, as explained in `cluster/ubuntu/config-default.sh`.
 
 **Note:** When deploying, master needs to be connected to the Internet to download the necessary files.
 If your machines are located in a private network that need proxy setting to connect the Internet,
@@ -145,7 +165,7 @@ bring up the whole cluster.
 
 `$ KUBERNETES_PROVIDER=ubuntu ./kube-up.sh`
 
-The scripts automatically `scp` binaries and config files to all the machines and start kubernetes
+The scripts automatically copy binaries and config files to all the machines via `scp` and start kubernetes
 service on them. The only thing you need to do is to type the sudo password when promoted.
 
 ```console
@@ -222,7 +242,7 @@ We are working on these features which we'd like to let everybody know:
 to eliminate OS-distro differences.
 2. Tearing Down scripts: clear and re-create the whole stack by one click.
 
-### Trouble shooting
+### Troubleshooting
 
 Generally, what this approach does is quite simple:
 
@@ -285,7 +305,7 @@ $ KUBERNETES_PROVIDER=ubuntu ./kube-push.sh -h
 Here are some examples:
 
 * upgrade master to version 1.0.5: `$ KUBERNETES_PROVIDER=ubuntu ./kube-push.sh -m 1.0.5`
-* upgrade node 10.10.103.223 to version 1.0.5 : `$ KUBERNETES_PROVIDER=ubuntu ./kube-push.sh -n 10.10.103.223 1.0.5`
+* upgrade node `vcap@10.10.103.223` to version 1.0.5 : `$ KUBERNETES_PROVIDER=ubuntu ./kube-push.sh -n 10.10.103.223 1.0.5`
 * upgrade master and all nodes to version 1.0.5: `$ KUBERNETES_PROVIDER=ubuntu ./kube-push.sh 1.0.5`
 
 The script will not delete any resources of your cluster, it just replaces the binaries.
@@ -297,7 +317,7 @@ also [test-it-out](ubuntu.md#test-it-out)
 
 To make sure the version of the upgraded cluster is what you expect, you will find these commands helpful.
 * upgrade all components or master: `$ kubectl version`. Check the *Server Version*.
-* upgrade node 10.10.102.223: `$ ssh -t vcap@10.10.102.223 'cd /opt/bin && sudo ./kubelet --version'`
+* upgrade node `vcap@10.10.102.223`: `$ ssh -t vcap@10.10.102.223 'cd /opt/bin && sudo ./kubelet --version'`
 
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->

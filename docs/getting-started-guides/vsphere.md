@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/vsphere.md).
@@ -48,7 +49,7 @@ convenient).
 ### Prerequisites
 
 1. You need administrator credentials to an ESXi machine or vCenter instance.
-2. You must have Go (version 1.2 or later) installed: [www.golang.org](http://www.golang.org).
+2. You must have Go (see [here](../devel/development.md#go-versions) for supported versions) installed: [www.golang.org](http://www.golang.org).
 3. You must have your `GOPATH` set up and include `$GOPATH/bin` in your `PATH`.
 
    ```sh
@@ -67,10 +68,10 @@ convenient).
 
 ### Setup
 
-Download a prebuilt Debian 7.7 VMDK that we'll use as a base image:
+Download a prebuilt Debian 8.2 VMDK that we'll use as a base image:
 
 ```sh
-curl --remote-name-all https://storage.googleapis.com/govmomi/vmdk/2014-11-11/kube.vmdk.gz{,.md5}
+curl --remote-name-all https://storage.googleapis.com/govmomi/vmdk/2016-01-08/kube.vmdk.gz{,.md5}
 md5sum -c kube.vmdk.gz.md5
 gzip -d kube.vmdk.gz
 ```
@@ -78,7 +79,10 @@ gzip -d kube.vmdk.gz
 Import this VMDK into your vSphere datastore:
 
 ```sh
-export GOVC_URL='user:pass@hostname'
+export GOVC_URL='hostname' # hostname of the vc
+export GOVC_USER='username' # username for logging into the vsphere.
+export GOVC_PASSWORD='password' # password for the above username
+export GOVC_NETWORK='Network Name' # Name of the network the vms should join. Many times it could be "VM Network"
 export GOVC_INSECURE=1 # If the host above uses a self-signed cert
 export GOVC_DATASTORE='target datastore'
 export GOVC_RESOURCE_POOL='resource pool or cluster with access to datastore'
@@ -98,7 +102,7 @@ parameters. The guest login for the image that you imported is `kube:kube`.
 ### Starting a cluster
 
 Now, let's continue with deploying Kubernetes.
-This process takes about ~10 minutes.
+This process takes about ~20-30 minutes depending on your network.
 
 ```sh
 cd kubernetes # Extracted binary release OR repository root

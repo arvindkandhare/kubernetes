@@ -39,7 +39,7 @@ const (
 $ kubectl attach 123456-7890
 
 # Get output from ruby-container from pod 123456-7890
-$ kubectl attach 123456-7890 -c ruby-container date
+$ kubectl attach 123456-7890 -c ruby-container
 
 # Switch to raw terminal mode, sends stdin to 'bash' in ruby-container from pod 123456-7890
 # and sends stdout/stderr from 'bash' back to the client
@@ -57,7 +57,7 @@ func NewCmdAttach(f *cmdutil.Factory, cmdIn io.Reader, cmdOut, cmdErr io.Writer)
 	cmd := &cobra.Command{
 		Use:     "attach POD -c CONTAINER",
 		Short:   "Attach to a running container.",
-		Long:    "Attach to a a process that is already running inside an existing container.",
+		Long:    "Attach to a process that is already running inside an existing container.",
 		Example: attach_example,
 		Run: func(cmd *cobra.Command, args []string) {
 			cmdutil.CheckErr(options.Complete(f, cmd, args))
@@ -219,9 +219,16 @@ func (p *AttachOptions) Run() error {
 		Stdout:    p.Out != nil,
 		Stderr:    p.Err != nil,
 		TTY:       tty,
-	}, api.Scheme)
+	}, api.ParameterCodec)
 
-	return p.Attach.Attach("POST", req.URL(), p.Config, stdin, p.Out, p.Err, tty)
+	err = p.Attach.Attach("POST", req.URL(), p.Config, stdin, p.Out, p.Err, tty)
+	if err != nil {
+		return err
+	}
+	if p.Stdin && tty && pod.Spec.RestartPolicy == api.RestartPolicyAlways {
+		fmt.Fprintf(p.Out, "Session ended, resume using 'kubectl attach %s -c %s -i -t' command when the pod is running\n", pod.Name, containerToAttach.Name)
+	}
+	return nil
 }
 
 // GetContainer returns the container to attach to, with a fallback.

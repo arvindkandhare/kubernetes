@@ -20,19 +20,26 @@ import (
 	"fmt"
 	"path"
 	"reflect"
+	"strconv"
 	"testing"
+
+	"sync"
 
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/testapi"
+	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/fields"
+	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
 	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
 	"k8s.io/kubernetes/pkg/storage/etcd/etcdtest"
 	etcdtesting "k8s.io/kubernetes/pkg/storage/etcd/testing"
 	storagetesting "k8s.io/kubernetes/pkg/storage/testing"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
 	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 type testRESTStrategy struct {
@@ -47,12 +54,24 @@ func (t *testRESTStrategy) NamespaceScoped() bool          { return t.namespaceS
 func (t *testRESTStrategy) AllowCreateOnUpdate() bool      { return t.allowCreateOnUpdate }
 func (t *testRESTStrategy) AllowUnconditionalUpdate() bool { return t.allowUnconditionalUpdate }
 
-func (t *testRESTStrategy) PrepareForCreate(obj runtime.Object)      {}
+func (t *testRESTStrategy) PrepareForCreate(obj runtime.Object) {
+	metaObj, err := meta.Accessor(obj)
+	if err != nil {
+		panic(err.Error())
+	}
+	labels := metaObj.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels["prepare_create"] = "true"
+	metaObj.SetLabels(labels)
+}
+
 func (t *testRESTStrategy) PrepareForUpdate(obj, old runtime.Object) {}
-func (t *testRESTStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (t *testRESTStrategy) Validate(ctx api.Context, obj runtime.Object) field.ErrorList {
 	return nil
 }
-func (t *testRESTStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (t *testRESTStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) field.ErrorList {
 	return nil
 }
 func (t *testRESTStrategy) Canonicalize(obj runtime.Object) {}
@@ -71,15 +90,15 @@ func hasCreated(t *testing.T, pod *api.Pod) func(runtime.Object) bool {
 func NewTestGenericEtcdRegistry(t *testing.T) (*etcdtesting.EtcdTestServer, *Etcd) {
 	podPrefix := "/pods"
 	server := etcdtesting.NewEtcdTestClientServer(t)
-	s := etcdstorage.NewEtcdStorage(server.Client, testapi.Default.Codec(), etcdtest.PathPrefix())
+	s := etcdstorage.NewEtcdStorage(server.Client, testapi.Default.Codec(), etcdtest.PathPrefix(), false)
 	strategy := &testRESTStrategy{api.Scheme, api.SimpleNameGenerator, true, false, true}
 
 	return server, &Etcd{
-		NewFunc:        func() runtime.Object { return &api.Pod{} },
-		NewListFunc:    func() runtime.Object { return &api.PodList{} },
-		EndpointName:   "pods",
-		CreateStrategy: strategy,
-		UpdateStrategy: strategy,
+		NewFunc:           func() runtime.Object { return &api.Pod{} },
+		NewListFunc:       func() runtime.Object { return &api.PodList{} },
+		QualifiedResource: api.Resource("pods"),
+		CreateStrategy:    strategy,
+		UpdateStrategy:    strategy,
 		KeyRootFunc: func(ctx api.Context) string {
 			return podPrefix
 		},
@@ -90,7 +109,20 @@ func NewTestGenericEtcdRegistry(t *testing.T) (*etcdtesting.EtcdTestServer, *Etc
 			return path.Join(podPrefix, id), nil
 		},
 		ObjectNameFunc: func(obj runtime.Object) (string, error) { return obj.(*api.Pod).Name, nil },
-		Storage:        s,
+		PredicateFunc: func(label labels.Selector, field fields.Selector) generic.Matcher {
+			return &generic.SelectionPredicate{
+				Label: label,
+				Field: field,
+				GetAttrs: func(obj runtime.Object) (labels.Set, fields.Set, error) {
+					pod, ok := obj.(*api.Pod)
+					if !ok {
+						return nil, nil, fmt.Errorf("not a pod")
+					}
+					return labels.Set(pod.ObjectMeta.Labels), generic.ObjectMetaFieldsSet(pod.ObjectMeta, true), nil
+				},
+			}
+		},
+		Storage: s,
 	}
 }
 
@@ -182,7 +214,7 @@ func TestEtcdList(t *testing.T) {
 		server, registry := NewTestGenericEtcdRegistry(t)
 
 		if item.in != nil {
-			if err := storagetesting.CreateList(t, "/pods", registry.Storage, item.in); err != nil {
+			if err := storagetesting.CreateList("/pods", registry.Storage, item.in); err != nil {
 				t.Errorf("Unexpected error %v", err)
 			}
 		}
@@ -309,6 +341,154 @@ func TestEtcdUpdate(t *testing.T) {
 
 }
 
+func TestNoOpUpdates(t *testing.T) {
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	newPod := func() *api.Pod {
+		return &api.Pod{
+			ObjectMeta: api.ObjectMeta{
+				Namespace: api.NamespaceDefault,
+				Name:      "foo",
+				Labels:    map[string]string{"prepare_create": "true"},
+			},
+			Spec: api.PodSpec{NodeName: "machine"},
+		}
+	}
+
+	var err error
+	var createResult runtime.Object
+	if createResult, err = registry.Create(api.NewDefaultContext(), newPod()); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	createdPod, err := registry.Get(api.NewDefaultContext(), "foo")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	var updateResult runtime.Object
+	if updateResult, _, err = registry.Update(api.NewDefaultContext(), newPod()); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	// Check whether we do not return empty result on no-op update.
+	if !reflect.DeepEqual(createResult, updateResult) {
+		t.Errorf("no-op update should return a correct value, got: %#v", updateResult)
+	}
+
+	updatedPod, err := registry.Get(api.NewDefaultContext(), "foo")
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	createdMeta, err := meta.Accessor(createdPod)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	updatedMeta, err := meta.Accessor(updatedPod)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	if createdMeta.GetResourceVersion() != updatedMeta.GetResourceVersion() {
+		t.Errorf("no-op update should be ignored and not written to etcd")
+	}
+}
+
+// TODO: Add a test to check no-op update if we have object with ResourceVersion
+// already stored in etcd. Currently there is no easy way to store object with
+// ResourceVersion in etcd.
+
+type testPodExport struct{}
+
+func (t testPodExport) Export(obj runtime.Object, exact bool) error {
+	pod := obj.(*api.Pod)
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels["exported"] = "true"
+	pod.Labels["exact"] = strconv.FormatBool(exact)
+
+	return nil
+}
+
+func TestEtcdCustomExport(t *testing.T) {
+	podA := api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			Namespace: "test",
+			Name:      "foo",
+			Labels:    map[string]string{},
+		},
+		Spec: api.PodSpec{NodeName: "machine"},
+	}
+
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	registry.ExportStrategy = testPodExport{}
+
+	testContext := api.WithNamespace(api.NewContext(), "test")
+	registry.UpdateStrategy.(*testRESTStrategy).allowCreateOnUpdate = true
+	if !updateAndVerify(t, testContext, registry, &podA) {
+		t.Errorf("Unexpected error updating podA")
+	}
+
+	obj, err := registry.Export(testContext, podA.Name, unversioned.ExportOptions{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	exportedPod := obj.(*api.Pod)
+	if exportedPod.Labels["exported"] != "true" {
+		t.Errorf("expected: exported->true, found: %s", exportedPod.Labels["exported"])
+	}
+	if exportedPod.Labels["exact"] != "false" {
+		t.Errorf("expected: exact->false, found: %s", exportedPod.Labels["exact"])
+	}
+	delete(exportedPod.Labels, "exported")
+	delete(exportedPod.Labels, "exact")
+	exportObjectMeta(&podA.ObjectMeta, false)
+	podA.Spec = exportedPod.Spec
+	if !reflect.DeepEqual(&podA, exportedPod) {
+		t.Errorf("expected:\n%v\nsaw:\n%v\n", &podA, exportedPod)
+	}
+}
+
+func TestEtcdBasicExport(t *testing.T) {
+	podA := api.Pod{
+		ObjectMeta: api.ObjectMeta{
+			Namespace: "test",
+			Name:      "foo",
+			Labels:    map[string]string{},
+		},
+		Spec:   api.PodSpec{NodeName: "machine"},
+		Status: api.PodStatus{HostIP: "1.2.3.4"},
+	}
+
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	testContext := api.WithNamespace(api.NewContext(), "test")
+	registry.UpdateStrategy.(*testRESTStrategy).allowCreateOnUpdate = true
+	if !updateAndVerify(t, testContext, registry, &podA) {
+		t.Errorf("Unexpected error updating podA")
+	}
+
+	obj, err := registry.Export(testContext, podA.Name, unversioned.ExportOptions{})
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	exportedPod := obj.(*api.Pod)
+	if exportedPod.Labels["prepare_create"] != "true" {
+		t.Errorf("expected: prepare_create->true, found: %s", exportedPod.Labels["prepare_create"])
+	}
+	exportObjectMeta(&podA.ObjectMeta, false)
+	podA.Spec = exportedPod.Spec
+	if !reflect.DeepEqual(&podA, exportedPod) {
+		t.Errorf("expected:\n%v\nsaw:\n%v\n", &podA, exportedPod)
+	}
+}
+
 func TestEtcdGet(t *testing.T) {
 	podA := &api.Pod{
 		ObjectMeta: api.ObjectMeta{Namespace: "test", Name: "foo"},
@@ -328,7 +508,6 @@ func TestEtcdGet(t *testing.T) {
 	if !updateAndVerify(t, testContext, registry, podA) {
 		t.Errorf("Unexpected error updating podA")
 	}
-
 }
 
 func TestEtcdDelete(t *testing.T) {
@@ -363,6 +542,120 @@ func TestEtcdDelete(t *testing.T) {
 	_, err = registry.Get(testContext, podA.Name)
 	if !errors.IsNotFound(err) {
 		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestEtcdDeleteCollection(t *testing.T) {
+	podA := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+	podB := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}}
+
+	testContext := api.WithNamespace(api.NewContext(), "test")
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	if _, err := registry.Create(testContext, podA); err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if _, err := registry.Create(testContext, podB); err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	// Delete all pods.
+	deleted, err := registry.DeleteCollection(testContext, nil, &api.ListOptions{})
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	deletedPods := deleted.(*api.PodList)
+	if len(deletedPods.Items) != 2 {
+		t.Errorf("Unexpected number of pods deleted: %d, expected: 2", len(deletedPods.Items))
+	}
+
+	if _, err := registry.Get(testContext, podA.Name); !errors.IsNotFound(err) {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if _, err := registry.Get(testContext, podB.Name); !errors.IsNotFound(err) {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestEtcdDeleteCollectionNotFound(t *testing.T) {
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	testContext := api.WithNamespace(api.NewContext(), "test")
+
+	podA := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+	podB := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "bar"}}
+
+	for i := 0; i < 10; i++ {
+		// Setup
+		if _, err := registry.Create(testContext, podA); err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if _, err := registry.Create(testContext, podB); err != nil {
+			t.Errorf("Unexpected error: %v", err)
+		}
+
+		// Kick off multiple delete collection calls to test notfound behavior
+		wg := &sync.WaitGroup{}
+		for j := 0; j < 5; j++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := registry.DeleteCollection(testContext, nil, &api.ListOptions{})
+				if err != nil {
+					t.Fatalf("Unexpected error: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+
+		if _, err := registry.Get(testContext, podA.Name); !errors.IsNotFound(err) {
+			t.Errorf("Unexpected error: %v", err)
+		}
+		if _, err := registry.Get(testContext, podB.Name); !errors.IsNotFound(err) {
+			t.Errorf("Unexpected error: %v", err)
+		}
+	}
+}
+
+// Test whether objects deleted with DeleteCollection are correctly delivered
+// to watchers.
+func TestEtcdDeleteCollectionWithWatch(t *testing.T) {
+	podA := &api.Pod{ObjectMeta: api.ObjectMeta{Name: "foo"}}
+
+	testContext := api.WithNamespace(api.NewContext(), "test")
+	server, registry := NewTestGenericEtcdRegistry(t)
+	defer server.Terminate(t)
+
+	objCreated, err := registry.Create(testContext, podA)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	podCreated := objCreated.(*api.Pod)
+
+	watcher, err := registry.WatchPredicate(testContext, setMatcher{sets.NewString("foo")}, podCreated.ResourceVersion)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	defer watcher.Stop()
+
+	if _, err := registry.DeleteCollection(testContext, nil, &api.ListOptions{}); err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+
+	got, open := <-watcher.ResultChan()
+	if !open {
+		t.Errorf("Unexpected channel close")
+	} else {
+		if got.Type != "DELETED" {
+			t.Errorf("Unexpected event type: %s", got.Type)
+		}
+		gotObject := got.Object.(*api.Pod)
+		gotObject.ResourceVersion = podCreated.ResourceVersion
+		if e, a := podCreated, gotObject; !reflect.DeepEqual(e, a) {
+			t.Errorf("Expected: %#v, got: %#v", e, a)
+		}
 	}
 }
 
@@ -415,6 +708,7 @@ func TestEtcdWatch(t *testing.T) {
 					}
 				}
 			}
+			wi.Stop()
 		}
 
 		server.Terminate(t)

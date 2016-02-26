@@ -28,7 +28,7 @@ import (
 	mesos "github.com/mesos/mesos-go/mesosproto"
 	mutil "github.com/mesos/mesos-go/mesosutil"
 	bindings "github.com/mesos/mesos-go/scheduler"
-	execcfg "k8s.io/kubernetes/contrib/mesos/pkg/executor/config"
+	"golang.org/x/net/context"
 	"k8s.io/kubernetes/contrib/mesos/pkg/executor/messages"
 	"k8s.io/kubernetes/contrib/mesos/pkg/node"
 	"k8s.io/kubernetes/contrib/mesos/pkg/offers"
@@ -36,20 +36,18 @@ import (
 	"k8s.io/kubernetes/contrib/mesos/pkg/proc"
 	"k8s.io/kubernetes/contrib/mesos/pkg/runtime"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler"
+	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/components/framework/frameworkid"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/components/tasksreconciler"
 	schedcfg "k8s.io/kubernetes/contrib/mesos/pkg/scheduler/config"
 	merrors "k8s.io/kubernetes/contrib/mesos/pkg/scheduler/errors"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/meta"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/metrics"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/podtask"
-	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/uid"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/fields"
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
 	"k8s.io/kubernetes/pkg/kubelet/container"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/util/sets"
 )
 
@@ -71,13 +69,13 @@ type framework struct {
 	// Config related, write-once
 	sched             scheduler.Scheduler
 	schedulerConfig   *schedcfg.Config
-	executor          *mesos.ExecutorInfo
-	executorGroup     uint64
-	client            *client.Client
+	client            *clientset.Clientset
 	failoverTimeout   float64 // in seconds
 	reconcileInterval int64
 	nodeRegistrator   node.Registrator
-	storeFrameworkId  func(id string)
+	storeFrameworkId  frameworkid.StoreFunc
+	lookupNode        node.LookupFunc
+	executorId        *mesos.ExecutorID
 
 	// Mesos context
 	driver         bindings.SchedulerDriver // late initialization
@@ -99,9 +97,9 @@ type framework struct {
 
 type Config struct {
 	SchedulerConfig   schedcfg.Config
-	Executor          *mesos.ExecutorInfo
-	Client            *client.Client
-	StoreFrameworkId  func(id string)
+	ExecutorId        *mesos.ExecutorID
+	Client            *clientset.Clientset
+	StoreFrameworkId  frameworkid.StoreFunc
 	FailoverTimeout   float64
 	ReconcileInterval int64
 	ReconcileCooldown time.Duration
@@ -114,24 +112,38 @@ func New(config Config) Framework {
 	k = &framework{
 		schedulerConfig:   &config.SchedulerConfig,
 		RWMutex:           new(sync.RWMutex),
-		executor:          config.Executor,
-		executorGroup:     uid.Parse(config.Executor.ExecutorId.GetValue()).Group(),
 		client:            config.Client,
 		failoverTimeout:   config.FailoverTimeout,
 		reconcileInterval: config.ReconcileInterval,
 		nodeRegistrator:   node.NewRegistrator(config.Client, config.LookupNode),
+		executorId:        config.ExecutorId,
 		offers: offers.CreateRegistry(offers.RegistryConfig{
 			Compat: func(o *mesos.Offer) bool {
 				// the node must be registered and have up-to-date labels
 				n := config.LookupNode(o.GetHostname())
 				if n == nil || !node.IsUpToDate(n, node.SlaveAttributesToLabels(o.GetAttributes())) {
+					if n == nil {
+						log.V(1).Infof("cannot find node %v", o.GetHostname())
+					} else {
+						log.V(1).Infof("node %v's attributes do not match: %v != %v",
+							o.GetHostname(), n.Labels, o.GetAttributes())
+					}
 					return false
 				}
 
-				// the executor IDs must not identify a kubelet-executor with a group that doesn't match ours
-				for _, eid := range o.GetExecutorIds() {
-					execuid := uid.Parse(eid.GetValue())
-					if execuid.Name() == execcfg.DefaultInfoID && execuid.Group() != k.executorGroup {
+				eids := len(o.GetExecutorIds())
+				switch {
+				case eids > 1:
+					// at most one executor id expected. More than one means that
+					// the given node is seriously in trouble.
+					log.V(1).Infof("at most one executor id is expected, but got %v (%v)", eids, o.GetExecutorIds())
+					return false
+
+				case eids == 1:
+					// the executor id must match, otherwise the running executor
+					// is incompatible with the current scheduler configuration.
+					if eid := o.GetExecutorIds()[0]; eid.GetValue() != config.ExecutorId.GetValue() {
+						log.V(1).Infof("executor ids do not match: %v != %v", eid.GetValue(), config.ExecutorId.GetValue())
 						return false
 					}
 				}
@@ -161,6 +173,7 @@ func New(config Config) Framework {
 			return proc.ErrorChanf("cannot execute action with unregistered scheduler")
 		}),
 		storeFrameworkId: config.StoreFrameworkId,
+		lookupNode:       config.LookupNode,
 	}
 	return k
 }
@@ -188,6 +201,45 @@ func (k *framework) asMaster() proc.Doer {
 	return k.asRegisteredMaster
 }
 
+// An executorRef holds a reference to an executor and the slave it is running on
+type executorRef struct {
+	executorID *mesos.ExecutorID
+	slaveID    *mesos.SlaveID
+}
+
+// executorRefs returns a slice of known references to running executors known to this framework
+func (k *framework) executorRefs() []executorRef {
+	slaves := k.slaveHostNames.SlaveIDs()
+	refs := make([]executorRef, 0, len(slaves))
+
+	for _, slaveID := range slaves {
+		hostname := k.slaveHostNames.HostName(slaveID)
+		if hostname == "" {
+			log.Warningf("hostname lookup for slaveID %q failed", slaveID)
+			continue
+		}
+
+		node := k.lookupNode(hostname)
+		if node == nil {
+			log.Warningf("node lookup for slaveID %q failed", slaveID)
+			continue
+		}
+
+		eid, ok := node.Annotations[meta.ExecutorIdKey]
+		if !ok {
+			log.Warningf("unable to find %q annotation for node %v", meta.ExecutorIdKey, node)
+			continue
+		}
+
+		refs = append(refs, executorRef{
+			executorID: mutil.NewExecutorID(eid),
+			slaveID:    mutil.NewSlaveID(slaveID),
+		})
+	}
+
+	return refs
+}
+
 func (k *framework) installDebugHandlers(mux *http.ServeMux) {
 	wrappedHandler := func(uri string, h http.Handler) {
 		mux.HandleFunc(uri, func(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +262,7 @@ func (k *framework) installDebugHandlers(mux *http.ServeMux) {
 			}
 		})
 	}
+
 	requestReconciliation := func(uri string, requestAction func()) {
 		wrappedHandler(uri, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestAction()
@@ -220,18 +273,34 @@ func (k *framework) installDebugHandlers(mux *http.ServeMux) {
 	requestReconciliation("/debug/actions/requestImplicit", k.tasksReconciler.RequestImplicit)
 
 	wrappedHandler("/debug/actions/kamikaze", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		slaves := k.slaveHostNames.SlaveIDs()
-		for _, slaveId := range slaves {
+		refs := k.executorRefs()
+
+		for _, ref := range refs {
 			_, err := k.driver.SendFrameworkMessage(
-				k.executor.ExecutorId,
-				mutil.NewSlaveID(slaveId),
-				messages.Kamikaze)
+				ref.executorID,
+				ref.slaveID,
+				messages.Kamikaze,
+			)
+
 			if err != nil {
-				log.Warningf("failed to send kamikaze message to slave %s: %v", slaveId, err)
-			} else {
-				io.WriteString(w, fmt.Sprintf("kamikaze slave %s\n", slaveId))
+				msg := fmt.Sprintf(
+					"error sending kamikaze message to executor %q on slave %q: %v",
+					ref.executorID.GetValue(),
+					ref.slaveID.GetValue(),
+					err,
+				)
+				log.Warning(msg)
+				fmt.Fprintln(w, msg)
+				continue
 			}
+
+			io.WriteString(w, fmt.Sprintf(
+				"kamikaze message sent to executor %q on slave %q\n",
+				ref.executorID.GetValue(),
+				ref.slaveID.GetValue(),
+			))
 		}
+
 		io.WriteString(w, "OK")
 	}))
 }
@@ -254,7 +323,7 @@ func (k *framework) Registered(drv bindings.SchedulerDriver, fid *mesos.Framewor
 }
 
 // Reregistered is called when the scheduler re-registered with the master successfully.
-// This happends when the master fails over.
+// This happens when the master fails over.
 func (k *framework) Reregistered(drv bindings.SchedulerDriver, mi *mesos.MasterInfo) {
 	log.Infof("Scheduler reregistered with the master: %v\n", mi)
 
@@ -275,9 +344,41 @@ func (k *framework) onInitialRegistration(driver bindings.SchedulerDriver) {
 		if k.failoverTimeout < k.schedulerConfig.FrameworkIdRefreshInterval.Duration.Seconds() {
 			refreshInterval = time.Duration(math.Max(1, k.failoverTimeout/2)) * time.Second
 		}
+
+		// wait until we've written the framework ID at least once before proceeding
+		firstStore := make(chan struct{})
 		go runtime.Until(func() {
-			k.storeFrameworkId(k.frameworkId.GetValue())
+			// only close firstStore once
+			select {
+			case <-firstStore:
+			default:
+				defer close(firstStore)
+			}
+			err := k.storeFrameworkId(context.TODO(), k.frameworkId.GetValue())
+			if err != nil {
+				log.Errorf("failed to store framework ID: %v", err)
+				if err == frameworkid.ErrMismatch {
+					// we detected a framework ID in storage that doesn't match what we're trying
+					// to save. this is a dangerous state:
+					// (1) perhaps we failed to initially recover the framework ID and so mesos
+					// issued us a new one. now that we're trying to save it there's a mismatch.
+					// (2) we've somehow bungled the framework ID and we're out of alignment with
+					// what mesos is expecting.
+					// (3) multiple schedulers were launched at the same time, and both have
+					// registered with mesos (because when they each checked, there was no ID in
+					// storage, so they asked for a new one). one of them has already written the
+					// ID to storage -- we lose.
+					log.Error("aborting due to framework ID mismatch")
+					driver.Abort()
+				}
+			}
 		}, refreshInterval, k.terminate)
+
+		// wait for the first store attempt of the framework ID
+		select {
+		case <-firstStore:
+		case <-k.terminate:
+		}
 	}
 
 	r1 := k.makeTaskRegistryReconciler()
@@ -419,17 +520,21 @@ func (k *framework) reconcileTerminalTask(driver bindings.SchedulerDriver, taskS
 		((taskStatus.GetSource() == mesos.TaskStatus_SOURCE_MASTER && taskStatus.GetReason() == mesos.TaskStatus_REASON_RECONCILIATION) ||
 			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED) ||
 			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_SLAVE && taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED) ||
-			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_EXECUTOR && taskStatus.GetMessage() == messages.ContainersDisappeared)) {
+			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_EXECUTOR && taskStatus.GetMessage() == messages.ContainersDisappeared) ||
+			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_EXECUTOR && taskStatus.GetMessage() == messages.KubeletPodLaunchFailed) ||
+			(taskStatus.GetSource() == mesos.TaskStatus_SOURCE_EXECUTOR && taskStatus.GetMessage() == messages.TaskKilled && !task.Has(podtask.Deleted))) {
 		//--
 		// pod-task has metadata that refers to:
 		// (1) a task that Mesos no longer knows about, or else
 		// (2) a pod that the Kubelet will never report as "failed"
 		// (3) a pod that the kubeletExecutor reported as lost (likely due to docker daemon crash/restart)
+		// (4) a pod that the kubeletExecutor reported as lost because the kubelet didn't manage to launch it (in time)
+		// (5) a pod that the kubeletExecutor killed, but the scheduler didn't ask for that (maybe killed by the master)
 		// For now, destroy the pod and hope that there's a replication controller backing it up.
 		// TODO(jdef) for case #2 don't delete the pod, just update it's status to Failed
 		pod := &task.Pod
 		log.Warningf("deleting rogue pod %v/%v for lost task %v", pod.Namespace, pod.Name, task.ID)
-		if err := k.client.Pods(pod.Namespace).Delete(pod.Name, api.NewDeleteOptions(0)); err != nil && !errors.IsNotFound(err) {
+		if err := k.client.Core().Pods(pod.Namespace).Delete(pod.Name, api.NewDeleteOptions(0)); err != nil && !errors.IsNotFound(err) {
 			log.Errorf("failed to delete pod %v/%v for terminal task %v: %v", pod.Namespace, pod.Name, task.ID, err)
 		}
 	} else if taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_TERMINATED || taskStatus.GetReason() == mesos.TaskStatus_REASON_EXECUTOR_UNREGISTERED {
@@ -481,7 +586,7 @@ func (k *framework) reconcileNonTerminalTask(driver bindings.SchedulerDriver, ta
 		// possible rogue pod exists at this point because we can't identify it; should kill the task
 		log.Errorf("possible rogue pod; illegal api.PodStatusResult, unable to parse full pod name from: '%v' for task %v: %v",
 			podStatus.Name, taskId, err)
-	} else if pod, err := k.client.Pods(namespace).Get(name); err == nil {
+	} else if pod, err := k.client.Core().Pods(namespace).Get(name); err == nil {
 		if t, ok, err := podtask.RecoverFrom(*pod); ok {
 			log.Infof("recovered task %v from metadata in pod %v/%v", taskId, namespace, name)
 			_, err := k.sched.Tasks().Register(t)
@@ -496,7 +601,7 @@ func (k *framework) reconcileNonTerminalTask(driver bindings.SchedulerDriver, ta
 		} else if err != nil {
 			//should kill the pod and the task
 			log.Errorf("killing pod, failed to recover task from pod %v/%v: %v", namespace, name, err)
-			if err := k.client.Pods(namespace).Delete(name, nil); err != nil {
+			if err := k.client.Core().Pods(namespace).Delete(name, nil); err != nil {
 				log.Errorf("failed to delete pod %v/%v: %v", namespace, name, err)
 			}
 		} else {
@@ -547,7 +652,6 @@ func (k *framework) SlaveLost(driver bindings.SchedulerDriver, slaveId *mesos.Sl
 // ExecutorLost is called when some executor is lost.
 func (k *framework) ExecutorLost(driver bindings.SchedulerDriver, executorId *mesos.ExecutorID, slaveId *mesos.SlaveID, status int) {
 	log.Infof("Executor %v of slave %v is lost, status: %v\n", executorId, slaveId, status)
-	// TODO(yifan): Restart any unfinished tasks of the executor.
 }
 
 // Error is called when there is an unrecoverable error in the scheduler or scheduler driver.
@@ -587,7 +691,7 @@ func (k *framework) makeTaskRegistryReconciler() taskreconciler.Action {
 // tasks identified by annotations in the Kubernetes pod registry.
 func (k *framework) makePodRegistryReconciler() taskreconciler.Action {
 	return taskreconciler.Action(func(drv bindings.SchedulerDriver, cancel <-chan struct{}) <-chan error {
-		podList, err := k.client.Pods(api.NamespaceAll).List(labels.Everything(), fields.Everything())
+		podList, err := k.client.Core().Pods(api.NamespaceAll).List(api.ListOptions{})
 		if err != nil {
 			return proc.ErrorChanf("failed to reconcile pod registry: %v", err)
 		}
@@ -663,7 +767,7 @@ func (k *framework) explicitlyReconcileTasks(driver bindings.SchedulerDriver, ta
 }
 
 func (ks *framework) recoverTasks() error {
-	podList, err := ks.client.Pods(api.NamespaceAll).List(labels.Everything(), fields.Everything())
+	podList, err := ks.client.Core().Pods(api.NamespaceAll).List(api.ListOptions{})
 	if err != nil {
 		log.V(1).Infof("failed to recover pod registry, madness may ensue: %v", err)
 		return err
@@ -682,7 +786,7 @@ func (ks *framework) recoverTasks() error {
 		}
 		if t, ok, err := podtask.RecoverFrom(pod); err != nil {
 			log.Errorf("failed to recover task from pod, will attempt to delete '%v/%v': %v", pod.Namespace, pod.Name, err)
-			err := ks.client.Pods(pod.Namespace).Delete(pod.Name, nil)
+			err := ks.client.Core().Pods(pod.Namespace).Delete(pod.Name, nil)
 			//TODO(jdef) check for temporary or not-found errors
 			if err != nil {
 				log.Errorf("failed to delete pod '%v/%v': %v", pod.Namespace, pod.Name, err)
@@ -703,11 +807,16 @@ func (ks *framework) KillTask(id string) error {
 }
 
 func (ks *framework) LaunchTask(t *podtask.T) error {
+	taskInfo, err := t.BuildTaskInfo()
+	if err != nil {
+		return err
+	}
+
 	// assume caller is holding scheduler lock
-	taskList := []*mesos.TaskInfo{t.BuildTaskInfo(ks.executor)}
+	taskList := []*mesos.TaskInfo{taskInfo}
 	offerIds := []*mesos.OfferID{t.Offer.Details().Id}
 	filters := &mesos.Filters{}
-	_, err := ks.driver.LaunchTasks(offerIds, taskList, filters)
+	_, err = ks.driver.LaunchTasks(offerIds, taskList, filters)
 	return err
 }
 

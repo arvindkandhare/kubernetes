@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/labels.md).
@@ -47,6 +48,7 @@ Documentation for other releases can be found at
     - [Set references in API objects](#set-references-in-api-objects)
       - [Service and ReplicationController](#service-and-replicationcontroller)
       - [Job and other new resources](#job-and-other-new-resources)
+      - [Selecting sets of nodes](#selecting-sets-of-nodes)
 
 <!-- END MUNGE: GENERATED_TOC -->
 
@@ -146,7 +148,7 @@ LIST and WATCH operations may specify label selectors to filter the sets of obje
     * _equality-based_ requirements: `?labelSelector=environment%3Dproduction,tier%3Dfrontend`
     * _set-based_ requirements: `?labelSelector=environment+in+%28production%2Cqa%29%2Ctier+in+%28frontend%29`
 
-Both label selector styles can be used to list or watch resources via a REST client. For example targetting `apiserver` with `kubectl` and using _equality-based_ one may write:
+Both label selector styles can be used to list or watch resources via a REST client. For example targeting `apiserver` with `kubectl` and using _equality-based_ one may write:
 
 ```console
 $ kubectl get pods -l environment=production,tier=frontend
@@ -209,6 +211,11 @@ selector:
 ```
 
 `matchLabels` is a map of `{key,value}` pairs. A single `{key,value}` in the `matchLabels` map is equivalent to an element of `matchExpressions`, whose `key` field is "key", the `operator` is "In", and the `values` array contains only "value". `matchExpressions` is a list of pod selector requirements. Valid operators include In, NotIn, Exists, and DoesNotExist. The values set must be non-empty in the case of In and NotIn. All of the requirements, from both `matchLabels` and `matchExpressions` are ANDed together -- they must all be satisfied in order to match.
+
+#### Selecting sets of nodes
+
+One use case for selecting over labels is to constrain the set of nodes onto which a pod can schedule.
+See the documentation on [node selection](node-selection/README.md) for more information.
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/user-guide/labels.md?pixel)]()

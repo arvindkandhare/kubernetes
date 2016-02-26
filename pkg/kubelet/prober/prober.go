@@ -19,6 +19,7 @@ package prober
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -28,12 +29,13 @@ import (
 	"k8s.io/kubernetes/pkg/client/record"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
+	"k8s.io/kubernetes/pkg/kubelet/util/format"
 	"k8s.io/kubernetes/pkg/probe"
 	execprobe "k8s.io/kubernetes/pkg/probe/exec"
 	httprobe "k8s.io/kubernetes/pkg/probe/http"
 	tcprobe "k8s.io/kubernetes/pkg/probe/tcp"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/exec"
+	"k8s.io/kubernetes/pkg/util/intstr"
 
 	"github.com/golang/glog"
 )
@@ -80,7 +82,7 @@ func (pb *prober) probe(probeType probeType, pod *api.Pod, status api.PodStatus,
 		return results.Failure, fmt.Errorf("Unknown probe type: %q", probeType)
 	}
 
-	ctrName := fmt.Sprintf("%s:%s", kubecontainer.GetPodFullName(pod), container.Name)
+	ctrName := fmt.Sprintf("%s:%s", format.Pod(pod), container.Name)
 	if probeSpec == nil {
 		glog.Warningf("%s probe for %s is nil", probeType, ctrName)
 		return results.Success, nil
@@ -96,12 +98,12 @@ func (pb *prober) probe(probeType probeType, pod *api.Pod, status api.PodStatus,
 		if err != nil {
 			glog.V(1).Infof("%s probe for %q errored: %v", probeType, ctrName, err)
 			if hasRef {
-				pb.recorder.Eventf(ref, kubecontainer.ContainerUnhealthy, "%s probe errored: %v", probeType, err)
+				pb.recorder.Eventf(ref, api.EventTypeWarning, kubecontainer.ContainerUnhealthy, "%s probe errored: %v", probeType, err)
 			}
 		} else { // result != probe.Success
 			glog.V(1).Infof("%s probe for %q failed (%v): %s", probeType, ctrName, result, output)
 			if hasRef {
-				pb.recorder.Eventf(ref, kubecontainer.ContainerUnhealthy, "%s probe failed: %s", probeType, output)
+				pb.recorder.Eventf(ref, api.EventTypeWarning, kubecontainer.ContainerUnhealthy, "%s probe failed: %s", probeType, output)
 			}
 		}
 		return results.Failure, err
@@ -125,6 +127,16 @@ func (pb *prober) runProbeWithRetries(p *api.Probe, pod *api.Pod, status api.Pod
 	return result, output, err
 }
 
+// buildHeaderMap takes a list of HTTPHeader <name, value> string
+// pairs and returns a a populated string->[]string http.Header map.
+func buildHeader(headerList []api.HTTPHeader) http.Header {
+	headers := make(http.Header)
+	for _, header := range headerList {
+		headers[header.Name] = append(headers[header.Name], header.Value)
+	}
+	return headers
+}
+
 func (pb *prober) runProbe(p *api.Probe, pod *api.Pod, status api.PodStatus, container api.Container, containerID kubecontainer.ContainerID) (probe.Result, string, error) {
 	timeout := time.Duration(p.TimeoutSeconds) * time.Second
 	if p.Exec != nil {
@@ -144,7 +156,9 @@ func (pb *prober) runProbe(p *api.Probe, pod *api.Pod, status api.PodStatus, con
 		path := p.HTTPGet.Path
 		glog.V(4).Infof("HTTP-Probe Host: %v://%v, Port: %v, Path: %v", scheme, host, port, path)
 		url := formatURL(scheme, host, port, path)
-		return pb.http.Probe(url, timeout)
+		headers := buildHeader(p.HTTPGet.HTTPHeaders)
+		glog.V(4).Infof("HTTP-Probe Headers: %v", headers)
+		return pb.http.Probe(url, headers, timeout)
 	}
 	if p.TCPSocket != nil {
 		port, err := extractPort(p.TCPSocket.Port, container)
@@ -155,16 +169,16 @@ func (pb *prober) runProbe(p *api.Probe, pod *api.Pod, status api.PodStatus, con
 		return pb.tcp.Probe(status.PodIP, port, timeout)
 	}
 	glog.Warningf("Failed to find probe builder for container: %v", container)
-	return probe.Unknown, "", fmt.Errorf("Missing probe handler for %s:%s", kubecontainer.GetPodFullName(pod), container.Name)
+	return probe.Unknown, "", fmt.Errorf("Missing probe handler for %s:%s", format.Pod(pod), container.Name)
 }
 
-func extractPort(param util.IntOrString, container api.Container) (int, error) {
+func extractPort(param intstr.IntOrString, container api.Container) (int, error) {
 	port := -1
 	var err error
-	switch param.Kind {
-	case util.IntstrInt:
-		port = param.IntVal
-	case util.IntstrString:
+	switch param.Type {
+	case intstr.Int:
+		port = param.IntValue()
+	case intstr.String:
 		if port, err = findPortByName(container, param.StrVal); err != nil {
 			// Last ditch effort - maybe it was an int stored as string?
 			if port, err = strconv.Atoi(param.StrVal); err != nil {
@@ -211,6 +225,10 @@ func (p *prober) newExecInContainer(container api.Container, containerID kubecon
 
 func (eic execInContainer) CombinedOutput() ([]byte, error) {
 	return eic.run()
+}
+
+func (eic execInContainer) Output() ([]byte, error) {
+	return nil, fmt.Errorf("unimplemented")
 }
 
 func (eic execInContainer) SetDir(dir string) {

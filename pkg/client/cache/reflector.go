@@ -35,7 +35,8 @@ import (
 	apierrs "k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util"
+	utilruntime "k8s.io/kubernetes/pkg/util/runtime"
+	"k8s.io/kubernetes/pkg/util/wait"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
@@ -43,7 +44,7 @@ import (
 type ListerWatcher interface {
 	// List should return a list type object; the Items field will be extracted, and the
 	// ResourceVersion field will be used to start the watch in the right place.
-	List() (runtime.Object, error)
+	List(options api.ListOptions) (runtime.Object, error)
 	// Watch should begin a watch at the specified version.
 	Watch(options api.ListOptions) (watch.Interface, error)
 }
@@ -63,6 +64,8 @@ type Reflector struct {
 	// the beginning of the next one.
 	period       time.Duration
 	resyncPeriod time.Duration
+	// now() returns current time - exposed for testing purposes
+	now func() time.Time
 	// nextResync is approximate time of next resync (0 if not scheduled)
 	nextResync time.Time
 	// lastSyncResourceVersion is the resource version token last
@@ -79,10 +82,8 @@ var (
 	// However, it can be modified to avoid periodic resync to break the
 	// TCP connection.
 	minWatchTimeout = 5 * time.Minute
-
-	now func() time.Time = time.Now
 	// If we are within 'forceResyncThreshold' from the next planned resync
-	// and are just before issueing Watch(), resync will be forced now.
+	// and are just before issuing Watch(), resync will be forced now.
 	forceResyncThreshold = 3 * time.Second
 	// We try to set timeouts for Watch() so that we will finish about
 	// than 'timeoutThreshold' from next planned periodic resync.
@@ -116,6 +117,7 @@ func NewNamedReflector(name string, lw ListerWatcher, expectedType interface{}, 
 		expectedType:  reflect.TypeOf(expectedType),
 		period:        time.Second,
 		resyncPeriod:  resyncPeriod,
+		now:           time.Now,
 	}
 	return r
 }
@@ -155,13 +157,13 @@ outer:
 // Run starts a watch and handles watch events. Will restart the watch if it is closed.
 // Run starts a goroutine and returns immediately.
 func (r *Reflector) Run() {
-	go util.Until(func() { r.ListAndWatch(util.NeverStop) }, r.period, util.NeverStop)
+	go wait.Until(func() { r.ListAndWatch(wait.NeverStop) }, r.period, wait.NeverStop)
 }
 
 // RunUntil starts a watch and handles watch events. Will restart the watch if it is closed.
 // RunUntil starts a goroutine and returns immediately. It will exit when stopCh is closed.
 func (r *Reflector) RunUntil(stopCh <-chan struct{}) {
-	go util.Until(func() { r.ListAndWatch(stopCh) }, r.period, stopCh)
+	go wait.Until(func() { r.ListAndWatch(stopCh) }, r.period, stopCh)
 }
 
 var (
@@ -187,7 +189,7 @@ func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
 	// always fail so we end up listing frequently. Then, if we don't
 	// manually stop the timer, we could end up with many timers active
 	// concurrently.
-	r.nextResync = now().Add(r.resyncPeriod)
+	r.nextResync = r.now().Add(r.resyncPeriod)
 	t := time.NewTimer(r.resyncPeriod)
 	return t.C, t.Stop
 }
@@ -204,7 +206,7 @@ func (r *Reflector) resyncChan() (<-chan time.Time, func() bool) {
 // TODO: This should be parametrizable based on server load.
 func (r *Reflector) timeoutForWatch() *int64 {
 	randTimeout := time.Duration(float64(minWatchTimeout) * (rand.Float64() + 1.0))
-	timeout := r.nextResync.Sub(now()) - timeoutThreshold
+	timeout := r.nextResync.Sub(r.now()) - timeoutThreshold
 	if timeout < 0 || randTimeout < timeout {
 		timeout = randTimeout
 	}
@@ -218,25 +220,31 @@ func (r *Reflector) canForceResyncNow() bool {
 	if r.nextResync.IsZero() {
 		return false
 	}
-	return now().Add(forceResyncThreshold).After(r.nextResync)
+	return r.now().Add(forceResyncThreshold).After(r.nextResync)
 }
 
-// Returns error if ListAndWatch didn't even tried to initialize watch.
+// ListAndWatch first lists all items and get the resource version at the moment of call,
+// and then use the resource version to watch.
+// It returns error if ListAndWatch didn't even try to initialize watch.
 func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 	var resourceVersion string
 	resyncCh, cleanup := r.resyncChan()
 	defer cleanup()
 
-	list, err := r.listerWatcher.List()
+	// Explicitly set "0" as resource version - it's fine for the List()
+	// to be served from cache and potentially be delayed relative to
+	// etcd contents. Reflector framework will catch up via Watch() eventually.
+	options := api.ListOptions{ResourceVersion: "0"}
+	list, err := r.listerWatcher.List(options)
 	if err != nil {
 		return fmt.Errorf("%s: Failed to list %v: %v", r.name, r.expectedType, err)
 	}
-	meta, err := meta.Accessor(list)
+	metaInterface, err := meta.Accessor(list)
 	if err != nil {
 		return fmt.Errorf("%s: Unable to understand list result %#v", r.name, list)
 	}
-	resourceVersion = meta.ResourceVersion()
-	items, err := runtime.ExtractList(list)
+	resourceVersion = metaInterface.GetResourceVersion()
+	items, err := meta.ExtractList(list)
 	if err != nil {
 		return fmt.Errorf("%s: Unable to understand list result %#v (%v)", r.name, list, err)
 	}
@@ -260,7 +268,7 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 			case io.ErrUnexpectedEOF:
 				glog.V(1).Infof("%s: Watch for %v closed with unexpected EOF: %v", r.name, r.expectedType, err)
 			default:
-				util.HandleError(fmt.Errorf("%s: Failed to watch %v: %v", r.name, r.expectedType, err))
+				utilruntime.HandleError(fmt.Errorf("%s: Failed to watch %v: %v", r.name, r.expectedType, err))
 			}
 			// If this is "connection refused" error, it means that most likely apiserver is not responsive.
 			// It doesn't make sense to re-list all objects because most likely we will be able to restart
@@ -322,15 +330,15 @@ loop:
 				return apierrs.FromObject(event.Object)
 			}
 			if e, a := r.expectedType, reflect.TypeOf(event.Object); e != nil && e != a {
-				util.HandleError(fmt.Errorf("%s: expected type %v, but watch event object had type %v", r.name, e, a))
+				utilruntime.HandleError(fmt.Errorf("%s: expected type %v, but watch event object had type %v", r.name, e, a))
 				continue
 			}
 			meta, err := meta.Accessor(event.Object)
 			if err != nil {
-				util.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
+				utilruntime.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
 				continue
 			}
-			newResourceVersion := meta.ResourceVersion()
+			newResourceVersion := meta.GetResourceVersion()
 			switch event.Type {
 			case watch.Added:
 				r.store.Add(event.Object)
@@ -342,7 +350,7 @@ loop:
 				// to change this.
 				r.store.Delete(event.Object)
 			default:
-				util.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
+				utilruntime.HandleError(fmt.Errorf("%s: unable to understand watch event %#v", r.name, event))
 			}
 			*resourceVersion = newResourceVersion
 			r.setLastSyncResourceVersion(newResourceVersion)

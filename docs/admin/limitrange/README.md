@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/admin/limitrange/README.md).
@@ -95,12 +96,12 @@ Let's describe the limits that we have imposed in our namespace.
 $ kubectl describe limits mylimits --namespace=limit-example
 Name:   mylimits
 Namespace:  limit-example
-Type        Resource      Min      Max      Request      Limit      Limit/Request
-----        --------      ---      ---      -------      -----      -------------
-Pod         cpu           200m     2        -            -          -
-Pod         memory        6Mi      1Gi      -            -          -
-Container   cpu           100m     2        200m         300m       -
-Container   memory        3Mi      1Gi      100Mi        200Mi      -
+Type        Resource      Min      Max      Default Request      Default Limit      Max Limit/Request Ratio
+----        --------      ---      ---      ---------------      -------------      -----------------------
+Pod         cpu           200m     2        -                    -                  -
+Pod         memory        6Mi      1Gi      -                    -                  -
+Container   cpu           100m     2        200m                 300m               -
+Container   memory        3Mi      1Gi      100Mi                200Mi              -
 ```
 
 In this scenario, we have said the following:

@@ -20,12 +20,13 @@ import (
 	"reflect"
 	"testing"
 
+	internal "k8s.io/kubernetes/pkg/api"
 	api "k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/runtime"
 )
 
 func encodeOrDie(obj runtime.Object) []byte {
-	data, err := api.Codec.Encode(obj)
+	data, err := runtime.Encode(internal.Codecs.LegacyCodec(api.SchemeGroupVersion), obj)
 	if err != nil {
 		panic(err.Error())
 	}
@@ -33,7 +34,7 @@ func encodeOrDie(obj runtime.Object) []byte {
 }
 
 func TestSortingPrinter(t *testing.T) {
-	intPtr := func(val int) *int { return &val }
+	intPtr := func(val int32) *int32 { return &val }
 
 	a := &api.Pod{
 		ObjectMeta: api.ObjectMeta{
@@ -223,7 +224,7 @@ func TestSortingPrinter(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		sort := &SortingPrinter{SortField: test.field}
+		sort := &SortingPrinter{SortField: test.field, Decoder: internal.Codecs.UniversalDecoder()}
 		if err := sort.sortObj(test.obj); err != nil {
 			t.Errorf("unexpected error: %v (%s)", err, test.name)
 			continue

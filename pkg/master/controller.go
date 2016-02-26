@@ -21,6 +21,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/endpoints"
 	"k8s.io/kubernetes/pkg/api/errors"
@@ -31,8 +32,10 @@ import (
 	servicecontroller "k8s.io/kubernetes/pkg/registry/service/ipallocator/controller"
 	portallocatorcontroller "k8s.io/kubernetes/pkg/registry/service/portallocator/controller"
 	"k8s.io/kubernetes/pkg/util"
-
-	"github.com/golang/glog"
+	"k8s.io/kubernetes/pkg/util/intstr"
+	utilnet "k8s.io/kubernetes/pkg/util/net"
+	"k8s.io/kubernetes/pkg/util/runtime"
+	"k8s.io/kubernetes/pkg/util/wait"
 )
 
 // Controller is the controller manager for the core bootstrap Kubernetes controller
@@ -50,7 +53,7 @@ type Controller struct {
 
 	ServiceNodePortRegistry service.RangeRegistry
 	ServiceNodePortInterval time.Duration
-	ServiceNodePortRange    util.PortRange
+	ServiceNodePortRange    utilnet.PortRange
 
 	EndpointRegistry endpoint.Registry
 	EndpointInterval time.Duration
@@ -97,12 +100,12 @@ func (c *Controller) Start() {
 
 // RunKubernetesService periodically updates the kubernetes service
 func (c *Controller) RunKubernetesService(ch chan struct{}) {
-	util.Until(func() {
+	wait.Until(func() {
 		// Service definition is not reconciled after first
 		// run, ports and type will be corrected only during
 		// start.
 		if err := c.UpdateKubernetesService(false); err != nil {
-			util.HandleError(fmt.Errorf("unable to sync kubernetes service: %v", err))
+			runtime.HandleError(fmt.Errorf("unable to sync kubernetes service: %v", err))
 		}
 	}, c.EndpointInterval, ch)
 }
@@ -157,7 +160,7 @@ func createPortAndServiceSpec(servicePort int, nodePort int, servicePortName str
 	servicePorts := []api.ServicePort{{Protocol: api.ProtocolTCP,
 		Port:       servicePort,
 		Name:       servicePortName,
-		TargetPort: util.NewIntOrStringFromInt(servicePort)}}
+		TargetPort: intstr.FromInt(servicePort)}}
 	serviceType := api.ServiceTypeClusterIP
 	if nodePort > 0 {
 		servicePorts[0].NodePort = nodePort
@@ -295,9 +298,14 @@ func (c *Controller) ReconcileEndpoints(serviceName string, ip net.IP, endpointP
 	return c.EndpointRegistry.UpdateEndpoints(ctx, e)
 }
 
-// Determine if the endpoint is in the format ReconcileEndpoints expect (one subset,
-// correct ports, N IP addresses); and if the specified IP address is present and
-// the correct number of ip addresses are found.
+// Determine if the endpoint is in the format ReconcileEndpoints expects.
+//
+// Return values:
+// * formatCorrect is true if exactly one subset is found.
+// * ipCorrect is true when current master's IP is found and the number
+//     of addresses is less than or equal to the master count.
+// * portsCorrect is true when endpoint ports exactly match provided ports.
+//     portsCorrect is only evaluated when reconcilePorts is set to true.
 func checkEndpointSubsetFormat(e *api.Endpoints, ip string, ports []api.EndpointPort, count int, reconcilePorts bool) (formatCorrect bool, ipCorrect bool, portsCorrect bool) {
 	if len(e.Subsets) != 1 {
 		return false, false, false
@@ -317,7 +325,7 @@ func checkEndpointSubsetFormat(e *api.Endpoints, ip string, ports []api.Endpoint
 	}
 	for _, addr := range sub.Addresses {
 		if addr.IP == ip {
-			ipCorrect = len(sub.Addresses) == count
+			ipCorrect = len(sub.Addresses) <= count
 			break
 		}
 	}

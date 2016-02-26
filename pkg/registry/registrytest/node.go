@@ -94,7 +94,7 @@ func (r *NodeRegistry) GetNode(ctx api.Context, nodeID string) (*api.Node, error
 			return &node, nil
 		}
 	}
-	return nil, errors.NewNotFound("node", nodeID)
+	return nil, errors.NewNotFound(api.Resource("nodes"), nodeID)
 }
 
 func (r *NodeRegistry) DeleteNode(ctx api.Context, nodeID string) error {

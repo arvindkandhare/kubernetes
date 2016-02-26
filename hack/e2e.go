@@ -18,12 +18,10 @@ limitations under the License.
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -60,7 +58,7 @@ const (
 	downloadDirName = "_output/downloads"
 	tarDirName      = "server"
 	tempDirName     = "upgrade-e2e-temp-dir"
-	minMinionCount  = 2
+	minNodeCount    = 2
 )
 
 var (
@@ -124,6 +122,7 @@ func main() {
 	}
 
 	os.Setenv("KUBECTL", versionRoot+`/cluster/kubectl.sh`+kubectlArgs())
+	os.Setenv("KUBE_TEST_DEBUG", "y")
 
 	if *pushup {
 		if IsUp() {
@@ -177,15 +176,12 @@ func Up() bool {
 			return false
 		}
 	}
-
-	// Enable deployments for e2e tests.
-	os.Setenv("KUBE_ENABLE_DEPLOYMENTS", "true")
 	return finishRunning("up", exec.Command(path.Join(*root, "hack/e2e-internal/e2e-up.sh")))
 }
 
 // Ensure that the cluster is large engough to run the e2e tests.
 func ValidateClusterSize() {
-	// Check that there are at least minMinionCount minions running
+	// Check that there are at least minNodeCount nodes running
 	cmd := exec.Command(path.Join(*root, "hack/e2e-internal/e2e-cluster-size.sh"))
 	if *verbose {
 		cmd.Stderr = os.Stderr
@@ -200,8 +196,8 @@ func ValidateClusterSize() {
 		log.Fatalf("Could not count number of nodes to validate cluster size (%s)", err)
 	}
 
-	if numNodes < minMinionCount {
-		log.Fatalf("Cluster size (%d) is too small to run e2e tests.  %d Minions are required.", numNodes, minMinionCount)
+	if numNodes < minNodeCount {
+		log.Fatalf("Cluster size (%d) is too small to run e2e tests.  %d Nodes are required.", numNodes, minNodeCount)
 	}
 }
 
@@ -258,14 +254,6 @@ func PrepareVersion(version string) (string, error) {
 	return localReleaseDir, nil
 }
 
-// Fisher-Yates shuffle using the given RNG r
-func shuffleStrings(strings []string, r *rand.Rand) {
-	for i := len(strings) - 1; i > 0; i-- {
-		j := r.Intn(i + 1)
-		strings[i], strings[j] = strings[j], strings[i]
-	}
-}
-
 func Test() bool {
 	if !IsUp() {
 		log.Fatal("Testing requested, but e2e cluster not up!")
@@ -274,25 +262,6 @@ func Test() bool {
 	ValidateClusterSize()
 
 	return finishRunning("Ginkgo tests", exec.Command(filepath.Join(*root, "hack/ginkgo-e2e.sh"), strings.Fields(*testArgs)...))
-}
-
-// All nonsense below is temporary until we have go versions of these things.
-
-// call the returned anonymous function to stop.
-func runBashUntil(stepName string, cmd *exec.Cmd) func() {
-	log.Printf("Running in background: %v", stepName)
-	output := bytes.NewBuffer(nil)
-	cmd.Stdout, cmd.Stderr = output, output
-	if err := cmd.Start(); err != nil {
-		log.Printf("Unable to start '%v': '%v'", stepName, err)
-		return func() {}
-	}
-	return func() {
-		cmd.Process.Signal(os.Interrupt)
-		headerprefix := stepName + " "
-		lineprefix := "  "
-		printBashOutputs(headerprefix, lineprefix, string(output.Bytes()), false)
-	}
 }
 
 func finishRunning(stepName string, cmd *exec.Cmd) bool {
@@ -310,19 +279,6 @@ func finishRunning(stepName string, cmd *exec.Cmd) bool {
 		return false
 	}
 	return true
-}
-
-func printBashOutputs(headerprefix, lineprefix, output string, escape bool) {
-	if output != "" {
-		fmt.Printf("%voutput: |\n", headerprefix)
-		printPrefixedLines(lineprefix, output)
-	}
-}
-
-func printPrefixedLines(prefix, s string) {
-	for _, line := range strings.Split(s, "\n") {
-		fmt.Printf("%v%v\n", prefix, line)
-	}
 }
 
 // returns either "", or a list of args intended for appending with the

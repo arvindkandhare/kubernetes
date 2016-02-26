@@ -22,39 +22,39 @@ import (
 	"math/rand"
 	"time"
 
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+
 	"k8s.io/kubernetes/pkg/admission"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/resource"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	"k8s.io/kubernetes/pkg/client/cache"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 	resourcequotacontroller "k8s.io/kubernetes/pkg/controller/resourcequota"
-	"k8s.io/kubernetes/pkg/fields"
-	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/runtime"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
 	"k8s.io/kubernetes/pkg/watch"
 )
 
 func init() {
-	admission.RegisterPlugin("ResourceQuota", func(client client.Interface, config io.Reader) (admission.Interface, error) {
+	admission.RegisterPlugin("ResourceQuota", func(client clientset.Interface, config io.Reader) (admission.Interface, error) {
 		return NewResourceQuota(client), nil
 	})
 }
 
 type quota struct {
 	*admission.Handler
-	client  client.Interface
+	client  clientset.Interface
 	indexer cache.Indexer
 }
 
 // NewResourceQuota creates a new resource quota admission control handler
-func NewResourceQuota(client client.Interface) admission.Interface {
+func NewResourceQuota(client clientset.Interface) admission.Interface {
 	lw := &cache.ListWatch{
-		ListFunc: func() (runtime.Object, error) {
-			return client.ResourceQuotas(api.NamespaceAll).List(labels.Everything(), fields.Everything())
+		ListFunc: func(options api.ListOptions) (runtime.Object, error) {
+			return client.Core().ResourceQuotas(api.NamespaceAll).List(options)
 		},
 		WatchFunc: func(options api.ListOptions) (watch.Interface, error) {
-			return client.ResourceQuotas(api.NamespaceAll).Watch(labels.Everything(), fields.Everything(), options)
+			return client.Core().ResourceQuotas(api.NamespaceAll).Watch(options)
 		},
 	}
 	indexer, reflector := cache.NewNamespaceKeyedIndexerAndReflector(lw, &api.ResourceQuota{}, 0)
@@ -62,7 +62,7 @@ func NewResourceQuota(client client.Interface) admission.Interface {
 	return createResourceQuota(client, indexer)
 }
 
-func createResourceQuota(client client.Interface, indexer cache.Indexer) admission.Interface {
+func createResourceQuota(client clientset.Interface, indexer cache.Indexer) admission.Interface {
 	return &quota{
 		Handler: admission.NewHandler(admission.Create, admission.Update),
 		client:  client,
@@ -70,13 +70,13 @@ func createResourceQuota(client client.Interface, indexer cache.Indexer) admissi
 	}
 }
 
-var resourceToResourceName = map[string]api.ResourceName{
-	"pods":                   api.ResourcePods,
-	"services":               api.ResourceServices,
-	"replicationcontrollers": api.ResourceReplicationControllers,
-	"resourcequotas":         api.ResourceQuotas,
-	"secrets":                api.ResourceSecrets,
-	"persistentvolumeclaims": api.ResourcePersistentVolumeClaims,
+var resourceToResourceName = map[unversioned.GroupResource]api.ResourceName{
+	api.Resource("pods"):                   api.ResourcePods,
+	api.Resource("services"):               api.ResourceServices,
+	api.Resource("replicationcontrollers"): api.ResourceReplicationControllers,
+	api.Resource("resourcequotas"):         api.ResourceQuotas,
+	api.Resource("secrets"):                api.ResourceSecrets,
+	api.Resource("persistentvolumeclaims"): api.ResourcePersistentVolumeClaims,
 }
 
 func (q *quota) Admit(a admission.Attributes) (err error) {
@@ -143,7 +143,7 @@ func (q *quota) Admit(a admission.Attributes) (err error) {
 						Annotations:     quota.Annotations},
 				}
 				usage.Status = *status
-				_, err = q.client.ResourceQuotas(usage.Namespace).UpdateStatus(&usage)
+				_, err = q.client.Core().ResourceQuotas(usage.Namespace).UpdateStatus(&usage)
 				if err == nil {
 					break
 				}
@@ -154,7 +154,7 @@ func (q *quota) Admit(a admission.Attributes) (err error) {
 				}
 				time.Sleep(interval)
 				// manually get the latest quota
-				quota, err = q.client.ResourceQuotas(usage.Namespace).Get(quota.Name)
+				quota, err = q.client.Core().ResourceQuotas(usage.Namespace).Get(quota.Name)
 				if err != nil {
 					return admission.NewForbidden(a, err)
 				}
@@ -167,10 +167,10 @@ func (q *quota) Admit(a admission.Attributes) (err error) {
 // IncrementUsage updates the supplied ResourceQuotaStatus object based on the incoming operation
 // Return true if the usage must be recorded prior to admitting the new resource
 // Return an error if the operation should not pass admission control
-func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, client client.Interface) (bool, error) {
+func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, client clientset.Interface) (bool, error) {
 	// on update, the only resource that can modify the value of a quota is pods
 	// so if your not a pod, we exit quickly
-	if a.GetOperation() == admission.Update && a.GetResource() != "pods" {
+	if a.GetOperation() == admission.Update && a.GetResource() != api.Resource("pods") {
 		return false, nil
 	}
 
@@ -199,7 +199,7 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 		}
 	}
 
-	if a.GetResource() == "pods" {
+	if a.GetResource() == api.Resource("pods") {
 		for _, resourceName := range []api.ResourceName{api.ResourceMemory, api.ResourceCPU} {
 
 			// ignore tracking the resource if it's not in the quota document
@@ -223,12 +223,12 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 			delta, err := resourcequotacontroller.PodRequests(pod, resourceName)
 
 			if err != nil {
-				return false, fmt.Errorf("must make a non-zero request for %s since it is tracked by quota.", resourceName)
+				return false, fmt.Errorf("%s is limited by quota, must make explicit request.", resourceName)
 			}
 
 			// if this operation is an update, we need to find the delta usage from the previous state
 			if a.GetOperation() == admission.Update {
-				oldPod, err := client.Pods(a.GetNamespace()).Get(pod.Name)
+				oldPod, err := client.Core().Pods(a.GetNamespace()).Get(pod.Name)
 				if err != nil {
 					return false, err
 				}
@@ -258,7 +258,7 @@ func IncrementUsage(a admission.Attributes, status *api.ResourceQuotaStatus, cli
 			}
 
 			if newUsageValue > hardUsageValue {
-				errs = append(errs, fmt.Errorf("unable to admit pod without exceeding quota for resource %s:  limited to %s but require %s to succeed.", resourceName, hard.String(), newUsage.String()))
+				errs = append(errs, fmt.Errorf("%s quota is %s, current usage is %s, requesting %s.", resourceName, hard.String(), used.String(), delta.String()))
 				dirty = false
 			} else {
 				status.Used[resourceName] = *newUsage

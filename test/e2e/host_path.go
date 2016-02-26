@@ -22,8 +22,8 @@ import (
 	"path"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 
 	. "github.com/onsi/ginkgo"
@@ -111,7 +111,7 @@ func testPodWithHostVol(path string, source *api.HostPathVolumeSource) *api.Pod 
 	return &api.Pod{
 		TypeMeta: unversioned.TypeMeta{
 			Kind:       "Pod",
-			APIVersion: latest.GroupOrDie("").Version,
+			APIVersion: registered.GroupOrDie(api.GroupName).GroupVersion.String(),
 		},
 		ObjectMeta: api.ObjectMeta{
 			Name: podName,
@@ -120,7 +120,7 @@ func testPodWithHostVol(path string, source *api.HostPathVolumeSource) *api.Pod 
 			Containers: []api.Container{
 				{
 					Name:  containerName1,
-					Image: "gcr.io/google_containers/mounttest:0.4",
+					Image: "gcr.io/google_containers/mounttest:0.6",
 					VolumeMounts: []api.VolumeMount{
 						{
 							Name:      volumeName,
@@ -130,7 +130,7 @@ func testPodWithHostVol(path string, source *api.HostPathVolumeSource) *api.Pod 
 				},
 				{
 					Name:  containerName2,
-					Image: "gcr.io/google_containers/mounttest:0.4",
+					Image: "gcr.io/google_containers/mounttest:0.6",
 					VolumeMounts: []api.VolumeMount{
 						{
 							Name:      volumeName,

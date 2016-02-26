@@ -30,6 +30,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/autoscaling"
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/types"
 )
 
 const TestClusterId = "clusterid.test"
@@ -133,6 +134,8 @@ func NewFakeAWSServices() *FakeAWSServices {
 
 	s.instanceId = "i-self"
 	s.privateDnsName = "ip-172-20-0-100.ec2.internal"
+	s.internalIP = "192.168.0.1"
+	s.externalIP = "1.2.3.4"
 	var selfInstance ec2.Instance
 	selfInstance.InstanceId = &s.instanceId
 	selfInstance.PrivateDnsName = &s.privateDnsName
@@ -249,9 +252,11 @@ func TestNewAWSCloud(t *testing.T) {
 }
 
 type FakeEC2 struct {
-	aws                  *FakeAWSServices
-	Subnets              []*ec2.Subnet
-	DescribeSubnetsInput *ec2.DescribeSubnetsInput
+	aws                      *FakeAWSServices
+	Subnets                  []*ec2.Subnet
+	DescribeSubnetsInput     *ec2.DescribeSubnetsInput
+	RouteTables              []*ec2.RouteTable
+	DescribeRouteTablesInput *ec2.DescribeRouteTablesInput
 }
 
 func contains(haystack []*string, needle string) bool {
@@ -272,6 +277,20 @@ func instanceMatchesFilter(instance *ec2.Instance, filter *ec2.Filter) bool {
 		}
 		return contains(filter.Values, *instance.PrivateDnsName)
 	}
+
+	if name == "instance-state-name" {
+		return contains(filter.Values, *instance.State.Name)
+	}
+
+	if name == "tag:"+TagNameKubernetesCluster {
+		for _, tag := range instance.Tags {
+			if *tag.Key == TagNameKubernetesCluster {
+				return contains(filter.Values, *tag.Value)
+			}
+		}
+		return false
+	}
+
 	panic("Unknown filter name: " + name)
 }
 
@@ -398,8 +417,9 @@ func (ec2 *FakeEC2) CreateTags(*ec2.CreateTagsInput) (*ec2.CreateTagsOutput, err
 	panic("Not implemented")
 }
 
-func (s *FakeEC2) DescribeRouteTables(request *ec2.DescribeRouteTablesInput) ([]*ec2.RouteTable, error) {
-	panic("Not implemented")
+func (ec2 *FakeEC2) DescribeRouteTables(request *ec2.DescribeRouteTablesInput) ([]*ec2.RouteTable, error) {
+	ec2.DescribeRouteTablesInput = request
+	return ec2.RouteTables, nil
 }
 
 func (s *FakeEC2) CreateRoute(request *ec2.CreateRouteInput) (*ec2.CreateRouteOutput, error) {
@@ -587,9 +607,10 @@ func TestNodeAddresses(t *testing.T) {
 	// (we test that this produces an error)
 	var instance0 ec2.Instance
 	var instance1 ec2.Instance
+	var instance2 ec2.Instance
 
 	//0
-	instance0.InstanceId = aws.String("instance-same")
+	instance0.InstanceId = aws.String("i-self")
 	instance0.PrivateDnsName = aws.String("instance-same.ec2.internal")
 	instance0.PrivateIpAddress = aws.String("192.168.0.1")
 	instance0.PublicIpAddress = aws.String("1.2.3.4")
@@ -600,7 +621,7 @@ func TestNodeAddresses(t *testing.T) {
 	instance0.State = &state0
 
 	//1
-	instance1.InstanceId = aws.String("instance-same")
+	instance1.InstanceId = aws.String("i-self")
 	instance1.PrivateDnsName = aws.String("instance-same.ec2.internal")
 	instance1.PrivateIpAddress = aws.String("192.168.0.2")
 	instance1.InstanceType = aws.String("c3.large")
@@ -609,7 +630,18 @@ func TestNodeAddresses(t *testing.T) {
 	}
 	instance1.State = &state1
 
-	instances := []*ec2.Instance{&instance0, &instance1}
+	//2
+	instance2.InstanceId = aws.String("i-self")
+	instance2.PrivateDnsName = aws.String("instance-other.ec2.internal")
+	instance2.PrivateIpAddress = aws.String("192.168.0.1")
+	instance2.PublicIpAddress = aws.String("1.2.3.4")
+	instance2.InstanceType = aws.String("c3.large")
+	state2 := ec2.InstanceState{
+		Name: aws.String("running"),
+	}
+	instance2.State = &state2
+
+	instances := []*ec2.Instance{&instance0, &instance1, &instance2}
 
 	aws1, _ := mockInstancesResp([]*ec2.Instance{})
 	_, err1 := aws1.NodeAddresses("instance-mismatch.ec2.internal")
@@ -693,24 +725,26 @@ func TestLoadBalancerMatchesClusterRegion(t *testing.T) {
 	badELBRegion := "bad-elb-region"
 	errorMessage := fmt.Sprintf("requested load balancer region '%s' does not match cluster region '%s'", badELBRegion, c.region)
 
-	_, _, err = c.GetTCPLoadBalancer("elb-name", badELBRegion)
+	_, _, err = c.GetLoadBalancer("elb-name", badELBRegion)
 	if err == nil || err.Error() != errorMessage {
-		t.Errorf("Expected GetTCPLoadBalancer region mismatch error.")
+		t.Errorf("Expected GetLoadBalancer region mismatch error.")
 	}
 
-	_, err = c.EnsureTCPLoadBalancer("elb-name", badELBRegion, nil, nil, nil, api.ServiceAffinityNone)
+	serviceName := types.NamespacedName{Namespace: "foo", Name: "bar"}
+
+	_, err = c.EnsureLoadBalancer("elb-name", badELBRegion, nil, nil, nil, serviceName, api.ServiceAffinityNone, nil)
 	if err == nil || err.Error() != errorMessage {
-		t.Errorf("Expected EnsureTCPLoadBalancer region mismatch error.")
+		t.Errorf("Expected EnsureLoadBalancer region mismatch error.")
 	}
 
-	err = c.EnsureTCPLoadBalancerDeleted("elb-name", badELBRegion)
+	err = c.EnsureLoadBalancerDeleted("elb-name", badELBRegion)
 	if err == nil || err.Error() != errorMessage {
-		t.Errorf("Expected EnsureTCPLoadBalancerDeleted region mismatch error.")
+		t.Errorf("Expected EnsureLoadBalancerDeleted region mismatch error.")
 	}
 
-	err = c.UpdateTCPLoadBalancer("elb-name", badELBRegion, nil)
+	err = c.UpdateLoadBalancer("elb-name", badELBRegion, nil)
 	if err == nil || err.Error() != errorMessage {
-		t.Errorf("Expected UpdateTCPLoadBalancer region mismatch error.")
+		t.Errorf("Expected UpdateLoadBalancer region mismatch error.")
 	}
 }
 
@@ -731,6 +765,35 @@ func constructSubnet(id string, az string) *ec2.Subnet {
 	return &ec2.Subnet{
 		SubnetId:         &id,
 		AvailabilityZone: &az,
+	}
+}
+
+func constructRouteTables(routeTablesIn map[string]bool) (routeTablesOut []*ec2.RouteTable) {
+	for subnetID := range routeTablesIn {
+		routeTablesOut = append(
+			routeTablesOut,
+			constructRouteTable(
+				subnetID,
+				routeTablesIn[subnetID],
+			),
+		)
+	}
+	return
+}
+
+func constructRouteTable(subnetID string, public bool) *ec2.RouteTable {
+	var gatewayID string
+	if public {
+		gatewayID = "igw-" + subnetID[len(subnetID)-8:8]
+	} else {
+		gatewayID = "vgw-" + subnetID[len(subnetID)-8:8]
+	}
+	return &ec2.RouteTable{
+		Associations: []*ec2.RouteTableAssociation{{SubnetId: aws.String(subnetID)}},
+		Routes: []*ec2.Route{{
+			DestinationCidrBlock: aws.String("0.0.0.0/0"),
+			GatewayId:            aws.String(gatewayID),
+		}},
 	}
 }
 
@@ -757,7 +820,14 @@ func TestSubnetIDsinVPC(t *testing.T) {
 	subnets[2]["az"] = "af-south-1c"
 	awsServices.ec2.Subnets = constructSubnets(subnets)
 
-	result, err := c.listSubnetIDsinVPC(vpcID)
+	routeTables := map[string]bool{
+		"subnet-a0000001": true,
+		"subnet-b0000001": true,
+		"subnet-c0000001": true,
+	}
+	awsServices.ec2.RouteTables = constructRouteTables(routeTables)
+
+	result, err := c.listPublicSubnetIDsinVPC(vpcID)
 	if err != nil {
 		t.Errorf("Error listing subnets: %v", err)
 		return
@@ -786,8 +856,10 @@ func TestSubnetIDsinVPC(t *testing.T) {
 	subnets[3]["id"] = "subnet-c0000002"
 	subnets[3]["az"] = "af-south-1c"
 	awsServices.ec2.Subnets = constructSubnets(subnets)
+	routeTables["subnet-c0000002"] = true
+	awsServices.ec2.RouteTables = constructRouteTables(routeTables)
 
-	result, err = c.listSubnetIDsinVPC(vpcID)
+	result, err = c.listPublicSubnetIDsinVPC(vpcID)
 	if err != nil {
 		t.Errorf("Error listing subnets: %v", err)
 		return
@@ -798,4 +870,259 @@ func TestSubnetIDsinVPC(t *testing.T) {
 		return
 	}
 
+	// test with 6 subnets from 3 different AZs
+	// with 3 private subnets
+	subnets[4] = make(map[string]string)
+	subnets[4]["id"] = "subnet-d0000001"
+	subnets[4]["az"] = "af-south-1a"
+	subnets[5] = make(map[string]string)
+	subnets[5]["id"] = "subnet-d0000002"
+	subnets[5]["az"] = "af-south-1b"
+
+	awsServices.ec2.Subnets = constructSubnets(subnets)
+	routeTables["subnet-a0000001"] = false
+	routeTables["subnet-b0000001"] = false
+	routeTables["subnet-c0000001"] = false
+	routeTables["subnet-c0000002"] = true
+	routeTables["subnet-d0000001"] = true
+	routeTables["subnet-d0000002"] = true
+	awsServices.ec2.RouteTables = constructRouteTables(routeTables)
+	result, err = c.listPublicSubnetIDsinVPC(vpcID)
+	if err != nil {
+		t.Errorf("Error listing subnets: %v", err)
+		return
+	}
+
+	if len(result) != 3 {
+		t.Errorf("Expected 3 subnets but got %d", len(result))
+		return
+	}
+
+	expected := []*string{aws.String("subnet-c0000002"), aws.String("subnet-d0000001"), aws.String("subnet-d0000002")}
+	for _, s := range result {
+		if !contains(expected, s) {
+			t.Errorf("Unexpected subnet '%s' found", s)
+			return
+		}
+	}
+}
+
+func TestIpPermissionExistsHandlesMultipleGroupIds(t *testing.T) {
+	oldIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("firstGroupId")},
+			{GroupId: aws.String("secondGroupId")},
+			{GroupId: aws.String("thirdGroupId")},
+		},
+	}
+
+	existingIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("secondGroupId")},
+		},
+	}
+
+	newIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("fourthGroupId")},
+		},
+	}
+
+	equals := ipPermissionExists(&existingIpPermission, &oldIpPermission, false)
+	if !equals {
+		t.Errorf("Should have been considered equal since first is in the second array of groups")
+	}
+
+	equals = ipPermissionExists(&newIpPermission, &oldIpPermission, false)
+	if equals {
+		t.Errorf("Should have not been considered equal since first is not in the second array of groups")
+	}
+}
+
+func TestIpPermissionExistsHandlesRangeSubsets(t *testing.T) {
+	// Two existing scenarios we'll test against
+	emptyIpPermission := ec2.IpPermission{}
+
+	oldIpPermission := ec2.IpPermission{
+		IpRanges: []*ec2.IpRange{
+			{CidrIp: aws.String("10.0.0.0/8")},
+			{CidrIp: aws.String("192.168.1.0/24")},
+		},
+	}
+
+	// Two already existing ranges and a new one
+	existingIpPermission := ec2.IpPermission{
+		IpRanges: []*ec2.IpRange{
+			{CidrIp: aws.String("10.0.0.0/8")},
+		},
+	}
+	existingIpPermission2 := ec2.IpPermission{
+		IpRanges: []*ec2.IpRange{
+			{CidrIp: aws.String("192.168.1.0/24")},
+		},
+	}
+
+	newIpPermission := ec2.IpPermission{
+		IpRanges: []*ec2.IpRange{
+			{CidrIp: aws.String("172.16.0.0/16")},
+		},
+	}
+
+	exists := ipPermissionExists(&emptyIpPermission, &emptyIpPermission, false)
+	if !exists {
+		t.Errorf("Should have been considered existing since we're comparing a range array against itself")
+	}
+	exists = ipPermissionExists(&oldIpPermission, &oldIpPermission, false)
+	if !exists {
+		t.Errorf("Should have been considered existing since we're comparing a range array against itself")
+	}
+
+	exists = ipPermissionExists(&existingIpPermission, &oldIpPermission, false)
+	if !exists {
+		t.Errorf("Should have been considered existing since 10.* is in oldIpPermission's array of ranges")
+	}
+	exists = ipPermissionExists(&existingIpPermission2, &oldIpPermission, false)
+	if !exists {
+		t.Errorf("Should have been considered existing since 192.* is in oldIpPermission2's array of ranges")
+	}
+
+	exists = ipPermissionExists(&newIpPermission, &emptyIpPermission, false)
+	if exists {
+		t.Errorf("Should have not been considered existing since we compared against a missing array of ranges")
+	}
+	exists = ipPermissionExists(&newIpPermission, &oldIpPermission, false)
+	if exists {
+		t.Errorf("Should have not been considered existing since 172.* is not in oldIpPermission's array of ranges")
+	}
+}
+
+func TestIpPermissionExistsHandlesMultipleGroupIdsWithUserIds(t *testing.T) {
+	oldIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("firstGroupId"), UserId: aws.String("firstUserId")},
+			{GroupId: aws.String("secondGroupId"), UserId: aws.String("secondUserId")},
+			{GroupId: aws.String("thirdGroupId"), UserId: aws.String("thirdUserId")},
+		},
+	}
+
+	existingIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("secondGroupId"), UserId: aws.String("secondUserId")},
+		},
+	}
+
+	newIpPermission := ec2.IpPermission{
+		UserIdGroupPairs: []*ec2.UserIdGroupPair{
+			{GroupId: aws.String("secondGroupId"), UserId: aws.String("anotherUserId")},
+		},
+	}
+
+	equals := ipPermissionExists(&existingIpPermission, &oldIpPermission, true)
+	if !equals {
+		t.Errorf("Should have been considered equal since first is in the second array of groups")
+	}
+
+	equals = ipPermissionExists(&newIpPermission, &oldIpPermission, true)
+	if equals {
+		t.Errorf("Should have not been considered equal since first is not in the second array of groups")
+	}
+}
+
+func TestFindInstanceByNodeNameExcludesTerminatedInstances(t *testing.T) {
+	awsServices := NewFakeAWSServices()
+
+	nodeName := "my-dns.internal"
+
+	var tag ec2.Tag
+	tag.Key = aws.String(TagNameKubernetesCluster)
+	tag.Value = aws.String(TestClusterId)
+	tags := []*ec2.Tag{&tag}
+
+	var runningInstance ec2.Instance
+	runningInstance.InstanceId = aws.String("i-running")
+	runningInstance.PrivateDnsName = aws.String(nodeName)
+	runningInstance.State = &ec2.InstanceState{Code: aws.Int64(16), Name: aws.String("running")}
+	runningInstance.Tags = tags
+
+	var terminatedInstance ec2.Instance
+	terminatedInstance.InstanceId = aws.String("i-terminated")
+	terminatedInstance.PrivateDnsName = aws.String(nodeName)
+	terminatedInstance.State = &ec2.InstanceState{Code: aws.Int64(48), Name: aws.String("terminated")}
+	terminatedInstance.Tags = tags
+
+	instances := []*ec2.Instance{&terminatedInstance, &runningInstance}
+	awsServices.instances = append(awsServices.instances, instances...)
+
+	c, err := newAWSCloud(strings.NewReader("[global]"), awsServices)
+	if err != nil {
+		t.Errorf("Error building aws cloud: %v", err)
+		return
+	}
+
+	instance, err := c.findInstanceByNodeName(nodeName)
+
+	if err != nil {
+		t.Errorf("Failed to find instance: %v", err)
+		return
+	}
+
+	if *instance.InstanceId != "i-running" {
+		t.Errorf("Expected running instance but got %v", *instance.InstanceId)
+	}
+}
+
+func TestFindInstancesByNodeName(t *testing.T) {
+	awsServices := NewFakeAWSServices()
+
+	nodeNameOne := "my-dns.internal"
+	nodeNameTwo := "my-dns-two.internal"
+
+	var tag ec2.Tag
+	tag.Key = aws.String(TagNameKubernetesCluster)
+	tag.Value = aws.String(TestClusterId)
+	tags := []*ec2.Tag{&tag}
+
+	var runningInstance ec2.Instance
+	runningInstance.InstanceId = aws.String("i-running")
+	runningInstance.PrivateDnsName = aws.String(nodeNameOne)
+	runningInstance.State = &ec2.InstanceState{Code: aws.Int64(16), Name: aws.String("running")}
+	runningInstance.Tags = tags
+
+	var secondInstance ec2.Instance
+
+	secondInstance.InstanceId = aws.String("i-running")
+	secondInstance.PrivateDnsName = aws.String(nodeNameTwo)
+	secondInstance.State = &ec2.InstanceState{Code: aws.Int64(48), Name: aws.String("running")}
+	secondInstance.Tags = tags
+
+	var terminatedInstance ec2.Instance
+	terminatedInstance.InstanceId = aws.String("i-terminated")
+	terminatedInstance.PrivateDnsName = aws.String(nodeNameOne)
+	terminatedInstance.State = &ec2.InstanceState{Code: aws.Int64(48), Name: aws.String("terminated")}
+	terminatedInstance.Tags = tags
+
+	instances := []*ec2.Instance{&secondInstance, &runningInstance, &terminatedInstance}
+	awsServices.instances = append(awsServices.instances, instances...)
+
+	c, err := newAWSCloud(strings.NewReader("[global]"), awsServices)
+	if err != nil {
+		t.Errorf("Error building aws cloud: %v", err)
+		return
+	}
+
+	nodeNames := []string{nodeNameOne}
+	returnedInstances, errr := c.getInstancesByNodeNames(nodeNames)
+
+	if errr != nil {
+		t.Errorf("Failed to find instance: %v", err)
+		return
+	}
+
+	if len(returnedInstances) != 1 {
+		t.Errorf("Expected a single isntance but found: %v", returnedInstances)
+	}
+
+	if *returnedInstances[0].PrivateDnsName != nodeNameOne {
+		t.Errorf("Expected node name %v but got %v", nodeNameOne, returnedInstances[0].PrivateDnsName)
+	}
 }

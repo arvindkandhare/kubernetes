@@ -22,7 +22,7 @@ import (
 	"reflect"
 	"sort"
 
-	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/meta"
 	"k8s.io/kubernetes/pkg/api/v1"
 	"k8s.io/kubernetes/pkg/runtime"
 	"k8s.io/kubernetes/pkg/util/jsonpath"
@@ -35,10 +35,11 @@ import (
 type SortingPrinter struct {
 	SortField string
 	Delegate  ResourcePrinter
+	Decoder   runtime.Decoder
 }
 
 func (s *SortingPrinter) PrintObj(obj runtime.Object, out io.Writer) error {
-	if !runtime.IsListType(obj) {
+	if !meta.IsListType(obj) {
 		return s.Delegate.PrintObj(obj, out)
 	}
 
@@ -54,7 +55,7 @@ func (p *SortingPrinter) HandledResources() []string {
 }
 
 func (s *SortingPrinter) sortObj(obj runtime.Object) error {
-	objs, err := runtime.ExtractList(obj)
+	objs, err := meta.ExtractList(obj)
 	if err != nil {
 		return err
 	}
@@ -62,7 +63,7 @@ func (s *SortingPrinter) sortObj(obj runtime.Object) error {
 		return nil
 	}
 
-	sorter, err := SortObjects(objs, s.SortField)
+	sorter, err := SortObjects(s.Decoder, objs, s.SortField)
 	if err != nil {
 		return err
 	}
@@ -76,10 +77,10 @@ func (s *SortingPrinter) sortObj(obj runtime.Object) error {
 		list.Items = outputList
 		return nil
 	}
-	return runtime.SetList(obj, objs)
+	return meta.SetList(obj, objs)
 }
 
-func SortObjects(objs []runtime.Object, fieldInput string) (*RuntimeSort, error) {
+func SortObjects(decoder runtime.Decoder, objs []runtime.Object, fieldInput string) (*RuntimeSort, error) {
 	parser := jsonpath.New("sorting")
 
 	field, err := massageJSONPath(fieldInput)
@@ -96,7 +97,7 @@ func SortObjects(objs []runtime.Object, fieldInput string) (*RuntimeSort, error)
 		switch u := item.(type) {
 		case *runtime.Unknown:
 			var err error
-			if objs[ix], err = api.Codec.Decode(u.RawJSON); err != nil {
+			if objs[ix], _, err = decoder.Decode(u.RawJSON, nil, nil); err != nil {
 				return nil, err
 			}
 		}

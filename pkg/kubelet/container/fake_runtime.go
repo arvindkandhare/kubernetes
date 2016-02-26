@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/volume"
 )
@@ -33,13 +34,16 @@ type FakeRuntime struct {
 	sync.Mutex
 	CalledFunctions   []string
 	PodList           []*Pod
+	AllPodList        []*Pod
 	ImageList         []Image
-	PodStatus         api.PodStatus
+	APIPodStatus      api.PodStatus
+	PodStatus         PodStatus
 	StartedPods       []string
 	KilledPods        []string
 	StartedContainers []string
 	KilledContainers  []string
 	VersionInfo       string
+	APIVersionInfo    string
 	RuntimeType       string
 	Err               error
 	InspectErr        error
@@ -89,7 +93,8 @@ func (f *FakeRuntime) ClearCalls() {
 
 	f.CalledFunctions = []string{}
 	f.PodList = []*Pod{}
-	f.PodStatus = api.PodStatus{}
+	f.AllPodList = []*Pod{}
+	f.APIPodStatus = api.PodStatus{}
 	f.StartedPods = []string{}
 	f.KilledPods = []string{}
 	f.StartedContainers = []string{}
@@ -150,15 +155,26 @@ func (f *FakeRuntime) Version() (Version, error) {
 	return &FakeVersion{Version: f.VersionInfo}, f.Err
 }
 
+func (f *FakeRuntime) APIVersion() (Version, error) {
+	f.Lock()
+	defer f.Unlock()
+
+	f.CalledFunctions = append(f.CalledFunctions, "APIVersion")
+	return &FakeVersion{Version: f.APIVersionInfo}, f.Err
+}
+
 func (f *FakeRuntime) GetPods(all bool) ([]*Pod, error) {
 	f.Lock()
 	defer f.Unlock()
 
 	f.CalledFunctions = append(f.CalledFunctions, "GetPods")
+	if all {
+		return f.AllPodList, f.Err
+	}
 	return f.PodList, f.Err
 }
 
-func (f *FakeRuntime) SyncPod(pod *api.Pod, _ Pod, _ api.PodStatus, _ []api.Secret, backOff *util.Backoff) error {
+func (f *FakeRuntime) SyncPod(pod *api.Pod, _ api.PodStatus, _ *PodStatus, _ []api.Secret, backOff *util.Backoff) (result PodSyncResult) {
 	f.Lock()
 	defer f.Unlock()
 
@@ -167,7 +183,11 @@ func (f *FakeRuntime) SyncPod(pod *api.Pod, _ Pod, _ api.PodStatus, _ []api.Secr
 	for _, c := range pod.Spec.Containers {
 		f.StartedContainers = append(f.StartedContainers, c.Name)
 	}
-	return f.Err
+	// TODO(random-liu): Add SyncResult for starting and killing containers
+	if f.Err != nil {
+		result.Fail(f.Err)
+	}
+	return
 }
 
 func (f *FakeRuntime) KillPod(pod *api.Pod, runningPod Pod) error {
@@ -216,7 +236,7 @@ func (f *FakeRuntime) KillContainerInPod(container api.Container, pod *api.Pod) 
 	return f.Err
 }
 
-func (f *FakeRuntime) GetPodStatus(*api.Pod) (*api.PodStatus, error) {
+func (f *FakeRuntime) GetPodStatus(uid types.UID, name, namespace string) (*PodStatus, error) {
 	f.Lock()
 	defer f.Unlock()
 

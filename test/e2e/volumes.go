@@ -42,6 +42,7 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,16 +168,19 @@ func volumeTestCleanup(client *client.Client, config VolumeTestConfig) {
 		glog.Warningf("Failed to delete client pod: %v", err)
 		expectNoError(err, "Failed to delete client pod: %v", err)
 	}
-	err = podClient.Delete(config.prefix+"-server", nil)
-	if err != nil {
-		glog.Warningf("Failed to delete server pod: %v", err)
-		expectNoError(err, "Failed to delete server pod: %v", err)
+
+	if config.serverImage != "" {
+		err = podClient.Delete(config.prefix+"-server", nil)
+		if err != nil {
+			glog.Warningf("Failed to delete server pod: %v", err)
+			expectNoError(err, "Failed to delete server pod: %v", err)
+		}
 	}
 }
 
 // Start a client pod using given VolumeSource (exported by startVolumeServer())
 // and check that the pod sees the data from the server pod.
-func testVolumeClient(client *client.Client, config VolumeTestConfig, volume api.VolumeSource, expectedContent string) {
+func testVolumeClient(client *client.Client, config VolumeTestConfig, volume api.VolumeSource, fsGroup *int64, expectedContent string) {
 	By(fmt.Sprint("starting ", config.prefix, " client"))
 	podClient := client.Pods(config.namespace)
 
@@ -211,6 +215,11 @@ func testVolumeClient(client *client.Client, config VolumeTestConfig, volume api
 					},
 				},
 			},
+			SecurityContext: &api.PodSecurityContext{
+				SELinuxOptions: &api.SELinuxOptions{
+					Level: "s0:c0,c1",
+				},
+			},
 			Volumes: []api.Volume{
 				{
 					Name:         config.prefix + "-volume",
@@ -219,23 +228,47 @@ func testVolumeClient(client *client.Client, config VolumeTestConfig, volume api
 			},
 		},
 	}
+	if fsGroup != nil {
+		clientPod.Spec.SecurityContext.FSGroup = fsGroup
+	}
+
 	if _, err := podClient.Create(clientPod); err != nil {
 		Failf("Failed to create %s pod: %v", clientPod.Name, err)
 	}
 	expectNoError(waitForPodRunningInNamespace(client, clientPod.Name, config.namespace))
 
 	By("reading a web page from the client")
-	body, err := client.Get().
-		Namespace(config.namespace).
-		Resource("pods").
-		SubResource("proxy").
-		Name(clientPod.Name).
-		DoRaw()
+	subResourceProxyAvailable, err := serverVersionGTE(subResourcePodProxyVersion, client)
+	if err != nil {
+		Failf("Failed to get server version: %v", err)
+	}
+	var body []byte
+	if subResourceProxyAvailable {
+		body, err = client.Get().
+			Namespace(config.namespace).
+			Resource("pods").
+			SubResource("proxy").
+			Name(clientPod.Name).
+			DoRaw()
+	} else {
+		body, err = client.Get().
+			Prefix("proxy").
+			Namespace(config.namespace).
+			Resource("pods").
+			Name(clientPod.Name).
+			DoRaw()
+	}
 	expectNoError(err, "Cannot read web page: %v", err)
 	Logf("body: %v", string(body))
 
 	By("checking the page content")
 	Expect(body).To(ContainSubstring(expectedContent))
+
+	if fsGroup != nil {
+		By("Checking fsGroup")
+		_, err = lookForStringInPodExec(config.namespace, clientPod.Name, []string{"ls", "-ld", "/usr/share/nginx/html"}, strconv.Itoa(int(*fsGroup)), time.Minute)
+		Expect(err).NotTo(HaveOccurred(), "waiting for output from pod exec")
+	}
 }
 
 // Insert index.html with given content into given volume. It does so by
@@ -260,7 +293,7 @@ func injectHtml(client *client.Client, config VolumeTestConfig, volume api.Volum
 			Containers: []api.Container{
 				{
 					Name:    config.prefix + "-injector",
-					Image:   "gcr.io/google_containers/busybox",
+					Image:   "gcr.io/google_containers/busybox:1.24",
 					Command: []string{"/bin/sh"},
 					Args:    []string{"-c", "echo '" + content + "' > /mnt/index.html && chmod o+rX /mnt /mnt/index.html"},
 					VolumeMounts: []api.VolumeMount{
@@ -269,6 +302,11 @@ func injectHtml(client *client.Client, config VolumeTestConfig, volume api.Volum
 							MountPath: "/mnt",
 						},
 					},
+				},
+			},
+			SecurityContext: &api.PodSecurityContext{
+				SELinuxOptions: &api.SELinuxOptions{
+					Level: "s0:c0,c1",
 				},
 			},
 			RestartPolicy: api.RestartPolicyNever,
@@ -312,7 +350,9 @@ func deleteCinderVolume(name string) error {
 	return err
 }
 
-var _ = Describe("Volumes", func() {
+// These tests need privileged containers, which are disabled by default.  Run
+// the test with "go run hack/e2e.go ... --ginkgo.focus=[Feature:Volumes]"
+var _ = Describe("Volumes [Feature:Volumes]", func() {
 	framework := NewFramework("volume")
 
 	// If 'false', the test won't clear its volumes upon completion. Useful for debugging,
@@ -331,10 +371,7 @@ var _ = Describe("Volumes", func() {
 	// NFS
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// the test needs privileged containers, which are disabled by default.
-	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=Volume"
-	Describe("[Skipped] NFS", func() {
+	Describe("NFS", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace:   namespace.Name,
@@ -360,7 +397,7 @@ var _ = Describe("Volumes", func() {
 				},
 			}
 			// Must match content of test/images/volumes-tester/nfs/index.html
-			testVolumeClient(c, config, volume, "Hello from NFS!")
+			testVolumeClient(c, config, volume, nil, "Hello from NFS!")
 		})
 	})
 
@@ -368,10 +405,7 @@ var _ = Describe("Volumes", func() {
 	// Gluster
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// the test needs privileged containers, which are disabled by default.
-	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=Volume"
-	Describe("[Skipped] GlusterFS", func() {
+	Describe("GlusterFS", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace:   namespace.Name,
@@ -437,7 +471,7 @@ var _ = Describe("Volumes", func() {
 				},
 			}
 			// Must match content of test/images/volumes-tester/gluster/index.html
-			testVolumeClient(c, config, volume, "Hello from GlusterFS!")
+			testVolumeClient(c, config, volume, nil, "Hello from GlusterFS!")
 		})
 	})
 
@@ -445,13 +479,12 @@ var _ = Describe("Volumes", func() {
 	// iSCSI
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// the test needs privileged containers, which are disabled by default.
+	// The test needs privileged containers, which are disabled by default.
 	// Also, make sure that iscsiadm utility and iscsi target kernel modules
 	// are installed on all nodes!
 	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=iSCSI"
 
-	Describe("[Skipped] iSCSI", func() {
+	Describe("iSCSI", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace:   namespace.Name,
@@ -477,14 +510,15 @@ var _ = Describe("Volumes", func() {
 				ISCSI: &api.ISCSIVolumeSource{
 					TargetPortal: serverIP + ":3260",
 					// from test/images/volumes-tester/iscsi/initiatorname.iscsi
-					IQN:      "iqn.2003-01.org.linux-iscsi.f21.x8664:sn.4b0aae584f7c",
-					Lun:      0,
-					FSType:   "ext2",
-					ReadOnly: true,
+					IQN:    "iqn.2003-01.org.linux-iscsi.f21.x8664:sn.4b0aae584f7c",
+					Lun:    0,
+					FSType: "ext2",
 				},
 			}
+
+			fsGroup := int64(1234)
 			// Must match content of test/images/volumes-tester/iscsi/block.tar.gz
-			testVolumeClient(c, config, volume, "Hello from iSCSI")
+			testVolumeClient(c, config, volume, &fsGroup, "Hello from iSCSI")
 		})
 	})
 
@@ -492,12 +526,7 @@ var _ = Describe("Volumes", func() {
 	// Ceph RBD
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// the test needs privileged containers, which are disabled by default.
-	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=RBD"
-
-	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=Volume"
-	Describe("[Skipped] Ceph RBD", func() {
+	Describe("Ceph RBD", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace:   namespace.Name,
@@ -556,12 +585,13 @@ var _ = Describe("Volumes", func() {
 					SecretRef: &api.LocalObjectReference{
 						Name: config.prefix + "-secret",
 					},
-					FSType:   "ext2",
-					ReadOnly: true,
+					FSType: "ext2",
 				},
 			}
+			fsGroup := int64(1234)
+
 			// Must match content of test/images/volumes-tester/gluster/index.html
-			testVolumeClient(c, config, volume, "Hello from RBD")
+			testVolumeClient(c, config, volume, &fsGroup, "Hello from RBD")
 
 		})
 	})
@@ -569,10 +599,7 @@ var _ = Describe("Volumes", func() {
 	// Ceph
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// the test needs privileged containers, which are disabled by default.
-	// Run the test with "go run hack/e2e.go ... --ginkgo.focus=Volume"
-	Describe("[Skipped] CephFS", func() {
+	Describe("CephFS", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace:   namespace.Name,
@@ -596,7 +623,7 @@ var _ = Describe("Volumes", func() {
 			secret := &api.Secret{
 				TypeMeta: unversioned.TypeMeta{
 					Kind:       "Secret",
-					APIVersion: "v1beta3",
+					APIVersion: "v1",
 				},
 				ObjectMeta: api.ObjectMeta{
 					Name: config.prefix + "-secret",
@@ -630,7 +657,7 @@ var _ = Describe("Volumes", func() {
 				},
 			}
 			// Must match content of contrib/for-tests/volumes-ceph/ceph/index.html
-			testVolumeClient(c, config, volume, "Hello Ceph!")
+			testVolumeClient(c, config, volume, nil, "Hello Ceph!")
 		})
 	})
 
@@ -638,13 +665,12 @@ var _ = Describe("Volumes", func() {
 	// OpenStack Cinder
 	////////////////////////////////////////////////////////////////////////
 
-	// Marked with [Skipped] to skip the test by default (see driver.go),
-	// The test assumes that OpenStack client tools are installed
+	// This test assumes that OpenStack client tools are installed
 	// (/usr/bin/nova, /usr/bin/cinder and /usr/bin/keystone)
 	// and that the usual OpenStack authentication env. variables are set
 	// (OS_USERNAME, OS_PASSWORD, OS_TENANT_NAME at least).
 
-	Describe("[Skipped] Cinder", func() {
+	Describe("Cinder", func() {
 		It("should be mountable", func() {
 			config := VolumeTestConfig{
 				namespace: namespace.Name,
@@ -704,7 +730,8 @@ var _ = Describe("Volumes", func() {
 			content := "Hello from Cinder from namespace " + volumeName
 			injectHtml(c, config, volume, content)
 
-			testVolumeClient(c, config, volume, content)
+			fsGroup := int64(1234)
+			testVolumeClient(c, config, volume, &fsGroup, content)
 		})
 	})
 })

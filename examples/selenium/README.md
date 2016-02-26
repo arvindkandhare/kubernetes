@@ -18,10 +18,6 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
-<strong>
-The latest release of this document can be found
-[here](http://releases.k8s.io/release-1.1/examples/selenium/README.md).
-
 Documentation for other releases can be found at
 [releases.k8s.io](http://releases.k8s.io).
 </strong>
@@ -81,7 +77,7 @@ export PODNAME=`kubectl get pods --selector="app=selenium-hub" --output=template
 kubectl port-forward --pod=$PODNAME 4444:4444
 ```
 
-In a seperate terminal, you can now check the status.
+In a separate terminal, you can now check the status.
 
 ```console
 curl http://localhost:4444

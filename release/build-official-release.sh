@@ -52,7 +52,12 @@ VERSION_REGEX="^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-(beta|alph
 }
 VERSION_MAJOR="${BASH_REMATCH[1]}"
 VERSION_MINOR="${BASH_REMATCH[2]}"
-RELEASE_BRANCH="release-${VERSION_MAJOR}.${VERSION_MINOR}"
+if [[ "$KUBE_RELEASE_VERSION" =~ "alpha" ]]; then
+  # We don't want to version docs for alpha releases, so we are just pointing to head.
+  RELEASE_BRANCH="master"
+else
+  RELEASE_BRANCH="release-${VERSION_MAJOR}.${VERSION_MINOR}"
+fi
 
 declare -r KUBE_BUILD_DIR=$(mktemp -d "/tmp/kubernetes-build-release-${KUBE_RELEASE_VERSION}-XXXXXXX")
 
@@ -77,8 +82,14 @@ echo "Cloned, building release."
 echo
 
 cd "${KUBE_BUILD_DIR}"
+
 export KUBE_RELEASE_RUN_TESTS=n
 export KUBE_SKIP_CONFIRMATIONS=y
+# In order to build docker images for a release and tag them appropriately we need
+# to set these two variables.
+export KUBE_DOCKER_REGISTRY="gcr.io/google_containers"
+export KUBE_DOCKER_IMAGE_TAG="${KUBE_RELEASE_VERSION}"
+
 make release
 
 if ${KUBE_BUILD_DIR}/cluster/kubectl.sh version | grep Client | grep dirty; then
@@ -98,18 +109,13 @@ instructions elsewhere):
 
   1) pushd ${KUBE_BUILD_DIR}; build/push-official-release.sh ${KUBE_RELEASE_VERSION}
 
-  2) Go to https://github.com/GoogleCloudPlatform/kubernetes/releases
-     and create a new release with the ${KUBE_RELEASE_VERSION} tag.
+  2) Release notes draft, to be published when the release is announced:
 
-     a) Mark it as a pre-release (someone on the GKE team will mark it as an
-     official release when it's being rolled out, but should not be considered
-     stable prior to that).
-
-     b) Title it:
+     a) Title:
 
        Release ${KUBE_RELEASE_VERSION}
 
-     c) Use this template for the description:
+     b) Template for the description:
 
 ## [Documentation](http://releases.k8s.io/${RELEASE_BRANCH}/docs/README.md)
 ## [Examples](http://releases.k8s.io/${RELEASE_BRANCH}/examples)
@@ -122,12 +128,9 @@ binary | hash alg | hash
 \`kubernetes.tar.gz\` | md5 | \`${MD5}\`
 \`kubernetes.tar.gz\` | sha1 | \`${SHA1}\`
 
-     We'll fill in the release notes in the next stage.
+  3) Ensure all the binaries are in place on GCS before cleaning, (you might
+  want to wait until the release is announced and published on GitHub, too).
 
-  3) Upload the ${KUBE_BUILD_DIR}/kubernetes.tar.gz to GitHub
-
-  4) Ensure all the binaries are in place on GitHub and GCS before cleaning.
-
-  5) (make clean; popd; rm -rf ${KUBE_BUILD_DIR})
+  4) make clean; popd; rm -rf ${KUBE_BUILD_DIR}
 
 EOM

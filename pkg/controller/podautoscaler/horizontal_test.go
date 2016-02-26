@@ -24,9 +24,11 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	_ "k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/resource"
+	_ "k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/apis/extensions"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
+	"k8s.io/kubernetes/pkg/client/testing/core"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/client/unversioned/testclient"
 	"k8s.io/kubernetes/pkg/controller/podautoscaler/metrics"
@@ -62,22 +64,25 @@ type testCase struct {
 	CPUTarget           int
 	reportedLevels      []uint64
 	reportedCPURequests []resource.Quantity
+	cmTarget            *extensions.CustomMetricTargetList
 	scaleUpdated        bool
+	statusUpdated       bool
 	eventCreated        bool
 	verifyEvents        bool
 }
 
-func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
+func (tc *testCase) prepareTestClient(t *testing.T) *fake.Clientset {
 	namespace := "test-namespace"
 	hpaName := "test-hpa"
 	rcName := "test-rc"
 	podNamePrefix := "test-pod"
 
 	tc.scaleUpdated = false
+	tc.statusUpdated = false
 	tc.eventCreated = false
 
-	fakeClient := &testclient.Fake{}
-	fakeClient.AddReactor("list", "horizontalpodautoscalers", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient := &fake.Clientset{}
+	fakeClient.AddReactor("list", "horizontalpodautoscalers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := &extensions.HorizontalPodAutoscalerList{
 			Items: []extensions.HorizontalPodAutoscaler{
 				{
@@ -95,16 +100,28 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 						MinReplicas: &tc.minReplicas,
 						MaxReplicas: tc.maxReplicas,
 					},
+					Status: extensions.HorizontalPodAutoscalerStatus{
+						CurrentReplicas: tc.initialReplicas,
+						DesiredReplicas: tc.initialReplicas,
+					},
 				},
 			},
 		}
 		if tc.CPUTarget > 0.0 {
 			obj.Items[0].Spec.CPUUtilization = &extensions.CPUTargetUtilization{TargetPercentage: tc.CPUTarget}
 		}
+		if tc.cmTarget != nil {
+			b, err := json.Marshal(tc.cmTarget)
+			if err != nil {
+				t.Fatalf("Failed to marshal cm: %v", err)
+			}
+			obj.Items[0].Annotations = make(map[string]string)
+			obj.Items[0].Annotations[HpaCustomMetricsTargetAnnotationName] = string(b)
+		}
 		return true, obj, nil
 	})
 
-	fakeClient.AddReactor("get", "replicationController", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient.AddReactor("get", "replicationController", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := &extensions.Scale{
 			ObjectMeta: api.ObjectMeta{
 				Name:      rcName,
@@ -121,7 +138,7 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 		return true, obj, nil
 	})
 
-	fakeClient.AddReactor("list", "pods", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient.AddReactor("list", "pods", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := &api.PodList{}
 		for i := 0; i < len(tc.reportedCPURequests); i++ {
 			podName := fmt.Sprintf("%s-%d", podNamePrefix, i)
@@ -153,12 +170,12 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 		return true, obj, nil
 	})
 
-	fakeClient.AddProxyReactor("services", func(action testclient.Action) (handled bool, ret client.ResponseWrapper, err error) {
+	fakeClient.AddProxyReactor("services", func(action core.Action) (handled bool, ret client.ResponseWrapper, err error) {
 		timestamp := time.Now()
 		metrics := heapster.MetricResultList{}
 		for _, level := range tc.reportedLevels {
 			metric := heapster.MetricResult{
-				Metrics:         []heapster.MetricPoint{{timestamp, level}},
+				Metrics:         []heapster.MetricPoint{{timestamp, level, nil}},
 				LatestTimestamp: timestamp,
 			}
 			metrics.Items = append(metrics.Items, metric)
@@ -167,7 +184,7 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 		return true, newFakeResponseWrapper(heapsterRawMemResponse), nil
 	})
 
-	fakeClient.AddReactor("update", "replicationController", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient.AddReactor("update", "replicationController", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := action.(testclient.UpdateAction).GetObject().(*extensions.Scale)
 		replicas := action.(testclient.UpdateAction).GetObject().(*extensions.Scale).Spec.Replicas
 		assert.Equal(t, tc.desiredReplicas, replicas)
@@ -175,15 +192,16 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 		return true, obj, nil
 	})
 
-	fakeClient.AddReactor("update", "horizontalpodautoscalers", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient.AddReactor("update", "horizontalpodautoscalers", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := action.(testclient.UpdateAction).GetObject().(*extensions.HorizontalPodAutoscaler)
 		assert.Equal(t, namespace, obj.Namespace)
 		assert.Equal(t, hpaName, obj.Name)
 		assert.Equal(t, tc.desiredReplicas, obj.Status.DesiredReplicas)
+		tc.statusUpdated = true
 		return true, obj, nil
 	})
 
-	fakeClient.AddReactor("*", "events", func(action testclient.Action) (handled bool, ret runtime.Object, err error) {
+	fakeClient.AddReactor("*", "events", func(action core.Action) (handled bool, ret runtime.Object, err error) {
 		obj := action.(testclient.CreateAction).GetObject().(*api.Event)
 		if tc.verifyEvents {
 			assert.Equal(t, "SuccessfulRescale", obj.Reason)
@@ -198,6 +216,7 @@ func (tc *testCase) prepareTestClient(t *testing.T) *testclient.Fake {
 
 func (tc *testCase) verifyResults(t *testing.T) {
 	assert.Equal(t, tc.initialReplicas != tc.desiredReplicas, tc.scaleUpdated)
+	assert.True(t, tc.statusUpdated)
 	if tc.verifyEvents {
 		assert.Equal(t, tc.initialReplicas != tc.desiredReplicas, tc.eventCreated)
 	}
@@ -205,8 +224,8 @@ func (tc *testCase) verifyResults(t *testing.T) {
 
 func (tc *testCase) runTest(t *testing.T) {
 	testClient := tc.prepareTestClient(t)
-	metricsClient := metrics.NewHeapsterMetricsClient(testClient, metrics.DefaultHeapsterNamespace, metrics.DefaultHeapsterService)
-	hpaController := NewHorizontalController(testClient, metricsClient)
+	metricsClient := metrics.NewHeapsterMetricsClient(testClient, metrics.DefaultHeapsterNamespace, metrics.DefaultHeapsterScheme, metrics.DefaultHeapsterService, metrics.DefaultHeapsterPort)
+	hpaController := NewHorizontalController(testClient.Core(), testClient.Extensions(), testClient.Extensions(), metricsClient)
 	err := hpaController.reconcileAutoscalers()
 	assert.Equal(t, nil, err)
 	if tc.verifyEvents {
@@ -229,6 +248,25 @@ func TestScaleUp(t *testing.T) {
 	tc.runTest(t)
 }
 
+func TestScaleUpCM(t *testing.T) {
+	tc := testCase{
+		minReplicas:     2,
+		maxReplicas:     6,
+		initialReplicas: 3,
+		desiredReplicas: 4,
+		CPUTarget:       0,
+		cmTarget: &extensions.CustomMetricTargetList{
+			Items: []extensions.CustomMetricTarget{{
+				Name:        "qps",
+				TargetValue: resource.MustParse("15.0"),
+			}},
+		},
+		reportedLevels:      []uint64{20, 10, 30},
+		reportedCPURequests: []resource.Quantity{resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0")},
+	}
+	tc.runTest(t)
+}
+
 func TestScaleDown(t *testing.T) {
 	tc := testCase{
 		minReplicas:         2,
@@ -237,6 +275,24 @@ func TestScaleDown(t *testing.T) {
 		desiredReplicas:     3,
 		CPUTarget:           50,
 		reportedLevels:      []uint64{100, 300, 500, 250, 250},
+		reportedCPURequests: []resource.Quantity{resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0")},
+	}
+	tc.runTest(t)
+}
+
+func TestScaleDownCM(t *testing.T) {
+	tc := testCase{
+		minReplicas:     2,
+		maxReplicas:     6,
+		initialReplicas: 5,
+		desiredReplicas: 3,
+		CPUTarget:       0,
+		cmTarget: &extensions.CustomMetricTargetList{
+			Items: []extensions.CustomMetricTarget{{
+				Name:        "qps",
+				TargetValue: resource.MustParse("20"),
+			}}},
+		reportedLevels:      []uint64{12, 12, 12, 12, 12},
 		reportedCPURequests: []resource.Quantity{resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0"), resource.MustParse("1.0")},
 	}
 	tc.runTest(t)
@@ -255,6 +311,23 @@ func TestTolerance(t *testing.T) {
 	tc.runTest(t)
 }
 
+func TestToleranceCM(t *testing.T) {
+	tc := testCase{
+		minReplicas:     1,
+		maxReplicas:     5,
+		initialReplicas: 3,
+		desiredReplicas: 3,
+		cmTarget: &extensions.CustomMetricTargetList{
+			Items: []extensions.CustomMetricTarget{{
+				Name:        "qps",
+				TargetValue: resource.MustParse("20"),
+			}}},
+		reportedLevels:      []uint64{20, 21, 21},
+		reportedCPURequests: []resource.Quantity{resource.MustParse("0.9"), resource.MustParse("1.0"), resource.MustParse("1.1")},
+	}
+	tc.runTest(t)
+}
+
 func TestMinReplicas(t *testing.T) {
 	tc := testCase{
 		minReplicas:         2,
@@ -264,6 +337,45 @@ func TestMinReplicas(t *testing.T) {
 		CPUTarget:           90,
 		reportedLevels:      []uint64{10, 95, 10},
 		reportedCPURequests: []resource.Quantity{resource.MustParse("0.9"), resource.MustParse("1.0"), resource.MustParse("1.1")},
+	}
+	tc.runTest(t)
+}
+
+func TestZeroReplicas(t *testing.T) {
+	tc := testCase{
+		minReplicas:         3,
+		maxReplicas:         5,
+		initialReplicas:     0,
+		desiredReplicas:     3,
+		CPUTarget:           90,
+		reportedLevels:      []uint64{},
+		reportedCPURequests: []resource.Quantity{},
+	}
+	tc.runTest(t)
+}
+
+func TestToFewReplicas(t *testing.T) {
+	tc := testCase{
+		minReplicas:         3,
+		maxReplicas:         5,
+		initialReplicas:     2,
+		desiredReplicas:     3,
+		CPUTarget:           90,
+		reportedLevels:      []uint64{},
+		reportedCPURequests: []resource.Quantity{},
+	}
+	tc.runTest(t)
+}
+
+func TestTooManyReplicas(t *testing.T) {
+	tc := testCase{
+		minReplicas:         3,
+		maxReplicas:         5,
+		initialReplicas:     10,
+		desiredReplicas:     5,
+		CPUTarget:           90,
+		reportedLevels:      []uint64{},
+		reportedCPURequests: []resource.Quantity{},
 	}
 	tc.runTest(t)
 }

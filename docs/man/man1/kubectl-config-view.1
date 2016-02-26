@@ -16,7 +16,7 @@ kubectl config view \- Displays merged kubeconfig settings or a specified kubeco
 Displays merged kubeconfig settings or a specified kubeconfig file.
 
 .PP
-You can use \-\-output=template \-\-template=TEMPLATE to extract specific values.
+You can use \-\-output jsonpath={...} to extract specific values using a jsonpath expression.
 
 
 .SH OPTIONS
@@ -55,8 +55,12 @@ You can use \-\-output=template \-\-template=TEMPLATE to extract specific values
     When printing, show all resources (default hide terminated pods.)
 
 .PP
+\fB\-\-show\-labels\fP=false
+    When printing, show all labels as the last column (default hide labels column)
+
+.PP
 \fB\-\-sort\-by\fP=""
-    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. 'ObjectMeta.Name'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
+    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
 
 .PP
 \fB\-\-template\fP=""
@@ -79,7 +83,7 @@ You can use \-\-output=template \-\-template=TEMPLATE to extract specific values
 
 .PP
 \fB\-\-client\-certificate\fP=""
-    Path to a client key file for TLS.
+    Path to a client certificate file for TLS.
 
 .PP
 \fB\-\-client\-key\fP=""
@@ -167,7 +171,7 @@ You can use \-\-output=template \-\-template=TEMPLATE to extract specific values
 $ kubectl config view
 
 # Get the password for the e2e user
-$ kubectl config view \-o template \-\-template='{{range .users}}{{ if eq .name "e2e" }}{{ index .user.password }}{{end}}{{end}}'
+$ kubectl config view \-o jsonpath='{.users[?(@.name == "e2e")].user.password}'
 
 .fi
 .RE

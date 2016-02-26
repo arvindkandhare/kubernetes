@@ -53,6 +53,10 @@ type SpdyRoundTripper struct {
 
 	// Dialer is the dialer used to connect.  Used if non-nil.
 	Dialer *net.Dialer
+
+	// proxier knows which proxy to use given a request, defaults to http.ProxyFromEnvironment
+	// Used primarily for mocking the proxy discovery in tests.
+	proxier func(req *http.Request) (*url.URL, error)
 }
 
 // NewRoundTripper creates a new SpdyRoundTripper that will use
@@ -70,7 +74,11 @@ func NewSpdyRoundTripper(tlsConfig *tls.Config) *SpdyRoundTripper {
 // dial dials the host specified by req, using TLS if appropriate, optionally
 // using a proxy server if one is configured via environment variables.
 func (s *SpdyRoundTripper) dial(req *http.Request) (net.Conn, error) {
-	proxyURL, err := http.ProxyFromEnvironment(req)
+	proxier := s.proxier
+	if proxier == nil {
+		proxier = http.ProxyFromEnvironment
+	}
+	proxyURL, err := proxier(req)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +114,7 @@ func (s *SpdyRoundTripper) dial(req *http.Request) (net.Conn, error) {
 		return rwc, nil
 	}
 
-	host, _, err := net.SplitHostPort(req.URL.Host)
+	host, _, err := net.SplitHostPort(targetHost)
 	if err != nil {
 		return nil, err
 	}
@@ -120,6 +128,11 @@ func (s *SpdyRoundTripper) dial(req *http.Request) (net.Conn, error) {
 	// need to manually call Handshake() so we can call VerifyHostname() below
 	if err := tlsConn.Handshake(); err != nil {
 		return nil, err
+	}
+
+	// Return if we were configured to skip validation
+	if s.tlsConfig != nil && s.tlsConfig.InsecureSkipVerify {
+		return tlsConn, nil
 	}
 
 	if err := tlsConn.VerifyHostname(host); err != nil {
@@ -212,7 +225,8 @@ func (s *SpdyRoundTripper) NewConnection(resp *http.Response) (httpstream.Connec
 		if err != nil {
 			responseError = "unable to read error from server response"
 		} else {
-			if obj, err := api.Scheme.Decode(responseErrorBytes); err == nil {
+			// TODO: I don't belong here, I should be abstracted from this class
+			if obj, _, err := api.Codecs.UniversalDecoder().Decode(responseErrorBytes, nil, &unversioned.Status{}); err == nil {
 				if status, ok := obj.(*unversioned.Status); ok {
 					return nil, &apierrors.StatusError{ErrStatus: *status}
 				}

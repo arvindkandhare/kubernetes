@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/admin/resource-quota.md).
@@ -125,7 +126,7 @@ $ cat <<EOF > quota.json
   "apiVersion": "v1",
   "kind": "ResourceQuota",
   "metadata": {
-    "name": "quota",
+    "name": "quota"
   },
   "spec": {
     "hard": {
@@ -134,8 +135,8 @@ $ cat <<EOF > quota.json
       "pods": "10",
       "services": "5",
       "replicationcontrollers":"20",
-      "resourcequotas":"1",
-    },
+      "resourcequotas":"1"
+    }
   }
 }
 EOF

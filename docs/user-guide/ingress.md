@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/ingress.md).
@@ -54,7 +55,7 @@ Documentation for other releases can be found at
 
 __Terminology__
 
-Throughout this doc you will see a few terms that are sometimes used interchangably elsewhere, that might cause confusion. This section attempts to clarify them.
+Throughout this doc you will see a few terms that are sometimes used interchangeably elsewhere, that might cause confusion. This section attempts to clarify them.
 
 * Node: A single virtual or physical machine in a Kubernetes cluster.
 * Cluster: A group of nodes firewalled from the internet, that are the primary compute resources managed by Kubernetes.
@@ -88,7 +89,7 @@ It can be configured to give services externally-reachable urls, load balance tr
 ## Prerequisites
 
 Before you start using the Ingress resource, there are a few things you should understand:
-* The Ingress resource is not available in any Kubernetes release prior to 1.1
+* The Ingress is a beta resource, not available in any Kubernetes release prior to 1.1.
 * You need an Ingress controller to satisfy an Ingress. Simply creating the resource will have no effect.
 * On GCE/GKE there should be a [L7 cluster addon](../../cluster/addons/cluster-loadbalancing/glbc/README.md#prerequisites), on other platforms you either need to write your own or [deploy an existing controller](https://github.com/kubernetes/contrib/tree/master/Ingress) as a pod.
 * The resource currently does not support HTTPS, but will do so before it leaves beta.
@@ -243,7 +244,7 @@ __Default Backends__: An Ingress with no rules, like the one shown in the previo
 
 ### Loadbalancing
 
-An Ingress controller is bootstrapped with some loadbalancing policy settings that it applies to all Ingress, such as the loadbalancing algorithm, backend weight scheme etc. More advanced loadbalancing concepts (eg: persistent sessions, dynamic weights) are not yet exposed through the Ingress. You can still get these features through the [service loadbalancer](https://github.com/kubernetes/contrib/tree/master/service-loadbalancer). With time, we plan to distil loadbalancing patterns that are applicable cross platform into the Ingress resource.
+An Ingress controller is bootstrapped with some loadbalancing policy settings that it applies to all Ingress, such as the loadbalancing algorithm, backend weight scheme etc. More advanced loadbalancing concepts (eg: persistent sessions, dynamic weights) are not yet exposed through the Ingress. You can still get these features through the [service loadbalancer](https://github.com/kubernetes/contrib/tree/master/service-loadbalancer). With time, we plan to distill loadbalancing patterns that are applicable cross platform into the Ingress resource.
 
 It's also worth noting that even though health checks are not exposed directly through the Ingress, there exist parallel concepts in Kubernetes such as [readiness probes](https://github.com/kubernetes/kubernetes/blob/release-1.0/docs/user-guide/production-pods.md#liveness-and-readiness-probes-aka-health-checks) which allow you to achieve the same end result.
 

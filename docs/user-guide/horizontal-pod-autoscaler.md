@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/horizontal-pod-autoscaler.md).
@@ -74,6 +75,9 @@ CPU utilization is the recent CPU usage of a pod divided by the sum of CPU reque
 Please note that if some of the pod's containers do not have CPU request set,
 CPU utilization for the pod will not be defined and the autoscaler will not take any action.
 Further details of the autoscaling algorithm are given [here](../design/horizontal-pod-autoscaler.md#autoscaling-algorithm).
+
+Autoscaler uses heapster to collect CPU utilization.
+Therefore, it is required to deploy heapster monitoring in your cluster for autoscaling to work.
 
 Autoscaler accesses corresponding replication controller or deployment by scale sub-resource.
 Scale is an interface which allows to dynamically set the number of replicas and to learn the current state of them.

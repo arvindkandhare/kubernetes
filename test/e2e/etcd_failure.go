@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/fields"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/util/wait"
 
@@ -28,9 +27,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Etcd failure", func() {
+var _ = Describe("Etcd failure [Disruptive]", func() {
 
-	var skipped bool
 	framework := NewFramework("etcd-failure")
 
 	BeforeEach(func() {
@@ -39,15 +37,13 @@ var _ = Describe("Etcd failure", func() {
 		// - master access
 		// ... so the provider check should be identical to the intersection of
 		// providers that provide those capabilities.
-		skipped = true
 		SkipUnlessProviderIs("gce")
-		skipped = false
 
 		Expect(RunRC(RCConfig{
 			Client:    framework.Client,
 			Name:      "baz",
 			Namespace: framework.Namespace.Name,
-			Image:     "beta.gcr.io/google_containers/pause:2.0",
+			Image:     "gcr.io/google_containers/pause:2.0",
 			Replicas:  1,
 		})).NotTo(HaveOccurred())
 	})
@@ -93,10 +89,11 @@ func doEtcdFailure(failCommand, fixCommand string) {
 }
 
 func masterExec(cmd string) {
-	stdout, stderr, code, err := SSH(cmd, getMasterHost()+":22", testContext.Provider)
+	result, err := SSH(cmd, getMasterHost()+":22", testContext.Provider)
 	Expect(err).NotTo(HaveOccurred())
-	if code != 0 {
-		Failf("master exec command, '%v' failed with exitcode %v: \n\tstdout: %v\n\tstderr: %v", cmd, code, stdout, stderr)
+	if result.Code != 0 {
+		LogSSHResult(result)
+		Failf("master exec command returned non-zero")
 	}
 }
 
@@ -107,7 +104,8 @@ func checkExistingRCRecovers(f *Framework) {
 
 	By("deleting pods from existing replication controller")
 	expectNoError(wait.Poll(time.Millisecond*500, time.Second*60, func() (bool, error) {
-		pods, err := podClient.List(rcSelector, fields.Everything())
+		options := api.ListOptions{LabelSelector: rcSelector}
+		pods, err := podClient.List(options)
 		if err != nil {
 			Logf("apiserver returned error, as expected before recovery: %v", err)
 			return false, nil
@@ -125,7 +123,8 @@ func checkExistingRCRecovers(f *Framework) {
 
 	By("waiting for replication controller to recover")
 	expectNoError(wait.Poll(time.Millisecond*500, time.Second*60, func() (bool, error) {
-		pods, err := podClient.List(rcSelector, fields.Everything())
+		options := api.ListOptions{LabelSelector: rcSelector}
+		pods, err := podClient.List(options)
 		Expect(err).NotTo(HaveOccurred())
 		for _, pod := range pods.Items {
 			if pod.DeletionTimestamp == nil && api.IsPodReady(&pod) {

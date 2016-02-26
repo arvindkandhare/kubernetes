@@ -81,10 +81,11 @@ if [[ -n "${CONFORMANCE_TEST_SKIP_REGEX:-}" ]]; then
   ginkgo_args+=("--skip=${CONFORMANCE_TEST_SKIP_REGEX}")
   ginkgo_args+=("--seed=1436380640")
 fi
-if [[ ${GINKGO_PARALLEL} =~ ^[yY]$ ]]; then
-  ginkgo_args+=("-p")
+if [[ -n "${GINKGO_PARALLEL_NODES:-}" ]]; then
+  ginkgo_args+=("--nodes=${GINKGO_PARALLEL_NODES}")
+elif [[ ${GINKGO_PARALLEL} =~ ^[yY]$ ]]; then
+  ginkgo_args+=("--nodes=30") # By default, set --nodes=30.
 fi
-
 
 # The --host setting is used only when providing --auth_config
 # If --kubeconfig is used, the host to use is retrieved from the .kubeconfig
@@ -97,13 +98,15 @@ export PATH=$(dirname "${e2e_test}"):"${PATH}"
   --provider="${KUBERNETES_PROVIDER}" \
   --gce-project="${PROJECT:-}" \
   --gce-zone="${ZONE:-}" \
+  --gce-service-account="${GCE_SERVICE_ACCOUNT:-}" \
   --gke-cluster="${CLUSTER_NAME:-}" \
   --kube-master="${KUBE_MASTER:-}" \
   --cluster-tag="${CLUSTER_ID:-}" \
   --repo-root="${KUBE_VERSION_ROOT}" \
   --node-instance-group="${NODE_INSTANCE_GROUP:-}" \
-  --num-nodes="${NUM_MINIONS:-}" \
   --prefix="${KUBE_GCE_INSTANCE_PREFIX:-e2e}" \
+  ${NUM_NODES:+"--num-nodes=${NUM_NODES}"} \
+  ${E2E_CLEAN_START:+"--clean-start=true"} \
   ${E2E_MIN_STARTUP_PODS:+"--minStartupPods=${E2E_MIN_STARTUP_PODS}"} \
   ${E2E_REPORT_DIR:+"--report-dir=${E2E_REPORT_DIR}"} \
   "${@:-}"

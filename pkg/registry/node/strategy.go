@@ -26,15 +26,15 @@ import (
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/validation"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 	"k8s.io/kubernetes/pkg/fields"
+	"k8s.io/kubernetes/pkg/kubelet/client"
 	"k8s.io/kubernetes/pkg/labels"
 	"k8s.io/kubernetes/pkg/master/ports"
 	"k8s.io/kubernetes/pkg/registry/generic"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util"
-	"k8s.io/kubernetes/pkg/util/fielderrors"
+	utilnet "k8s.io/kubernetes/pkg/util/net"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
+	"k8s.io/kubernetes/pkg/util/validation/field"
 )
 
 // nodeStrategy implements behavior for nodes
@@ -71,7 +71,7 @@ func (nodeStrategy) PrepareForUpdate(obj, old runtime.Object) {
 }
 
 // Validate validates a new node.
-func (nodeStrategy) Validate(ctx api.Context, obj runtime.Object) fielderrors.ValidationErrorList {
+func (nodeStrategy) Validate(ctx api.Context, obj runtime.Object) field.ErrorList {
 	node := obj.(*api.Node)
 	return validation.ValidateNode(node)
 }
@@ -81,13 +81,29 @@ func (nodeStrategy) Canonicalize(obj runtime.Object) {
 }
 
 // ValidateUpdate is the default update validation for an end user.
-func (nodeStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (nodeStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) field.ErrorList {
 	errorList := validation.ValidateNode(obj.(*api.Node))
 	return append(errorList, validation.ValidateNodeUpdate(obj.(*api.Node), old.(*api.Node))...)
 }
 
 func (nodeStrategy) AllowUnconditionalUpdate() bool {
 	return true
+}
+
+func (ns nodeStrategy) Export(obj runtime.Object, exact bool) error {
+	n, ok := obj.(*api.Node)
+	if !ok {
+		// unexpected programmer error
+		return fmt.Errorf("unexpected object: %v", obj)
+	}
+	ns.PrepareForCreate(obj)
+	if exact {
+		return nil
+	}
+	// Nodes are the only resources that allow direct status edits, therefore
+	// we clear that without exact so that the node value can be reused.
+	n.Status = api.NodeStatus{}
+	return nil
 }
 
 type nodeStatusStrategy struct {
@@ -107,7 +123,7 @@ func (nodeStatusStrategy) PrepareForUpdate(obj, old runtime.Object) {
 	newNode.Spec = oldNode.Spec
 }
 
-func (nodeStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) fielderrors.ValidationErrorList {
+func (nodeStatusStrategy) ValidateUpdate(ctx api.Context, obj, old runtime.Object) field.ErrorList {
 	return validation.ValidateNodeUpdate(obj.(*api.Node), old.(*api.Node))
 }
 
@@ -146,7 +162,7 @@ func MatchNode(label labels.Selector, field fields.Selector) generic.Matcher {
 
 // ResourceLocation returns an URL and transport which one can use to send traffic for the specified node.
 func ResourceLocation(getter ResourceGetter, connection client.ConnectionInfoGetter, proxyTransport http.RoundTripper, ctx api.Context, id string) (*url.URL, http.RoundTripper, error) {
-	schemeReq, name, portReq, valid := util.SplitSchemeNamePort(id)
+	schemeReq, name, portReq, valid := utilnet.SplitSchemeNamePort(id)
 	if !valid {
 		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid node request %q", id))
 	}
@@ -162,9 +178,16 @@ func ResourceLocation(getter ResourceGetter, connection client.ConnectionInfoGet
 	}
 	host := hostIP.String()
 
-	if portReq == "" || strconv.Itoa(ports.KubeletPort) == portReq {
-		// Ignore requested scheme, use scheme provided by GetConnectionInfo
-		scheme, port, kubeletTransport, err := connection.GetConnectionInfo(host)
+	// We check if we want to get a default Kubelet's transport. It happens if either:
+	// - no port is specified in request (Kubelet's port is default),
+	// - we're using Port stored as a DaemonEndpoint and requested port is a Kubelet's port stored in the DaemonEndpoint,
+	// - there's no information in the API about DaemonEnpoint (legacy cluster) and requested port is equal to ports.KubeletPort (cluster-wide config)
+	kubeletPort := node.Status.DaemonEndpoints.KubeletEndpoint.Port
+	if kubeletPort == 0 {
+		kubeletPort = ports.KubeletPort
+	}
+	if portReq == "" || strconv.Itoa(kubeletPort) == portReq {
+		scheme, port, kubeletTransport, err := connection.GetConnectionInfo(ctx, node.Name)
 		if err != nil {
 			return nil, nil, err
 		}

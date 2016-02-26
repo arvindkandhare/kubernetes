@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/kubeconfig-file.md).
@@ -207,7 +208,7 @@ mister-red,mister-red,2
 
 Also, since we have other users who validate using **other** mechanisms, the api-server would have probably been launched with other authentication options (there are many such options, make sure you understand which ones YOU care about before crafting a kubeconfig file, as nobody needs to implement all the different permutations of possible authentication schemes).
 
-- Since the user for the current context is "green-user", any client of the api-server using this kubeconfig file would naturally be able to log in succesfully, because we are providigin the green-user's client credentials.
+- Since the user for the current context is "green-user", any client of the api-server using this kubeconfig file would naturally be able to log in successfully, because we are providing the green-user's client credentials.
 - Similarly, we can operate as the "blue-user" if we choose to change the value of current-context.
 
 In the above scenario, green-user would have to log in by providing certificates, whereas blue-user would just provide the token.  All this information would be handled for us by the
@@ -246,6 +247,11 @@ The rules for loading and merging the kubeconfig files are straightforward, but 
       1. The command line flags are: `client-certificate`, `client-key`, `username`, `password`, and `token`.
       1. If there are two conflicting techniques, fail.
   1.  For any information still missing, use default values and potentially prompt for authentication information
+  1.  All file references inside of a kubeconfig file are resolved relative to the location of the kubeconfig file itself.  When file references are presented on the command line
+  they are resolved relative to the current working directory.  When paths are saved in the ~/.kube/config, relative paths are stored relatively while absolute paths are stored absolutely.
+
+Any path in a kubeconfig file is resolved relative to the location of the kubeconfig file itself.
+
 
 ## Manipulation of kubeconfig via `kubectl config <subcommand>`
 

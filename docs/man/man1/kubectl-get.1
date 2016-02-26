@@ -19,7 +19,8 @@ Display one or many resources.
 Possible resource types include (case insensitive): pods (po), services (svc),
 replicationcontrollers (rc), nodes (no), events (ev), componentstatuses (cs),
 limitranges (limits), persistentvolumes (pv), persistentvolumeclaims (pvc),
-resourcequotas (quota), namespaces (ns), endpoints (ep), serviceaccounts or secrets.
+resourcequotas (quota), namespaces (ns), endpoints (ep),
+horizontalpodautoscalers (hpa), serviceaccounts or secrets.
 
 .PP
 By specifying the output as 'template' and providing a Go template as the value
@@ -30,6 +31,10 @@ of the \-\-template flag, you can filter the attributes of the fetched resource(
 .PP
 \fB\-\-all\-namespaces\fP=false
     If present, list the requested object(s) across all namespaces. Namespace in current context is ignored even if specified with \-\-namespace.
+
+.PP
+\fB\-\-export\fP=false
+    If true, use 'export' for the resources.  Exported resources are stripped of cluster\-specific information.
 
 .PP
 \fB\-f\fP, \fB\-\-filename\fP=[]
@@ -62,8 +67,12 @@ of the \-\-template flag, you can filter the attributes of the fetched resource(
     When printing, show all resources (default hide terminated pods.)
 
 .PP
+\fB\-\-show\-labels\fP=false
+    When printing, show all labels as the last column (default hide labels column)
+
+.PP
 \fB\-\-sort\-by\fP=""
-    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. 'ObjectMeta.Name'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
+    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
 
 .PP
 \fB\-\-template\fP=""
@@ -94,7 +103,7 @@ of the \-\-template flag, you can filter the attributes of the fetched resource(
 
 .PP
 \fB\-\-client\-certificate\fP=""
-    Path to a client key file for TLS.
+    Path to a client certificate file for TLS.
 
 .PP
 \fB\-\-client\-key\fP=""

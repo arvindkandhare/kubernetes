@@ -56,12 +56,17 @@ function startApiServer() {
     --service-cluster-ip-range="10.0.0.0/24" 1>&2 &
   APISERVER_PID=$!
 
-  kube::util::wait_for_url "http://127.0.0.1:${API_PORT}/healthz" "apiserver: "
+  # url, prefix, wait, times
+  kube::util::wait_for_url "http://127.0.0.1:${API_PORT}/healthz" "apiserver: " 1 120
 }
 
 function killApiServer() {
   kube::log::status "Killing api server"
-  [[ -n ${APISERVER_PID-} ]] && kill ${APISERVER_PID} 1>&2 2>/dev/null
+  if [[ -n ${APISERVER_PID-} ]]; then
+    kill ${APISERVER_PID} 1>&2 2>/dev/null
+    wait ${APISERVER_PID} || true
+    kube::log::status "api server exited"
+  fi
   unset APISERVER_PID
 }
 
@@ -79,7 +84,7 @@ kube::etcd::start
 
 kube::log::status "Running test for update etcd object scenario"
 
-"${KUBE_ROOT}/hack/build-go.sh"
+"${KUBE_ROOT}/hack/build-go.sh" cmd/kube-apiserver
 
 
 #######################################################
@@ -113,12 +118,16 @@ ${UPDATE_ETCD_OBJECTS_SCRIPT}
 killApiServer
 
 
+
 #######################################################
 # Step 3 : Start a server which supports only the new api version.
 #######################################################
 
 KUBE_API_VERSIONS="${KUBE_NEW_API_VERSION}"
 RUNTIME_CONFIG="api/all=false,api/${KUBE_NEW_API_VERSION}=true"
+
+# This seems to reduce flakiness.
+sleep 1
 startApiServer
 
 # Verify that the server is able to read the object.

@@ -23,7 +23,7 @@ import (
 
 	"k8s.io/kubernetes/pkg/api"
 	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/util/intstr"
 
 	. "github.com/onsi/ginkgo"
 )
@@ -31,14 +31,14 @@ import (
 const (
 	dynamicConsumptionTimeInSeconds = 30
 	staticConsumptionTimeInSeconds  = 3600
-	dynamicRequestSizeInMillicores  = 100
+	dynamicRequestSizeInMillicores  = 20
 	dynamicRequestSizeInMegabytes   = 100
 	port                            = 80
 	targetPort                      = 8080
 	timeoutRC                       = 120 * time.Second
 	startServiceTimeout             = time.Minute
 	startServiceInterval            = 5 * time.Second
-	resourceConsumerImage           = "gcr.io/google_containers/resource_consumer:beta"
+	resourceConsumerImage           = "gcr.io/google_containers/resource_consumer:beta2"
 	rcIsNil                         = "ERROR: replicationController = nil"
 	deploymentIsNil                 = "ERROR: deployment = nil"
 	invalidKind                     = "ERROR: invalid workload kind for resource consumer"
@@ -187,10 +187,9 @@ func (rc *ResourceConsumer) sendConsumeMemRequests(requests, megabytes, duration
 // sendOneConsumeCPURequest sends POST request for cpu consumption
 func (rc *ResourceConsumer) sendOneConsumeCPURequest(millicores int, durationSec int) {
 	defer GinkgoRecover()
-	_, err := rc.framework.Client.Post().
-		Prefix("proxy").
-		Namespace(rc.framework.Namespace.Name).
-		Resource("services").
+	proxyRequest, err := getServicesProxyRequest(rc.framework.Client, rc.framework.Client.Post())
+	expectNoError(err)
+	_, err = proxyRequest.Namespace(rc.framework.Namespace.Name).
 		Name(rc.name).
 		Suffix("ConsumeCPU").
 		Param("millicores", strconv.Itoa(millicores)).
@@ -202,10 +201,9 @@ func (rc *ResourceConsumer) sendOneConsumeCPURequest(millicores int, durationSec
 // sendOneConsumeMemRequest sends POST request for memory consumption
 func (rc *ResourceConsumer) sendOneConsumeMemRequest(megabytes int, durationSec int) {
 	defer GinkgoRecover()
-	_, err := rc.framework.Client.Post().
-		Prefix("proxy").
-		Namespace(rc.framework.Namespace.Name).
-		Resource("services").
+	proxyRequest, err := getServicesProxyRequest(rc.framework.Client, rc.framework.Client.Post())
+	expectNoError(err)
+	_, err = proxyRequest.Namespace(rc.framework.Namespace.Name).
 		Name(rc.name).
 		Suffix("ConsumeMem").
 		Param("megabytes", strconv.Itoa(megabytes)).
@@ -279,7 +277,7 @@ func runServiceAndWorkloadForResourceConsumer(c *client.Client, ns, name, kind s
 		Spec: api.ServiceSpec{
 			Ports: []api.ServicePort{{
 				Port:       port,
-				TargetPort: util.NewIntOrStringFromInt(targetPort),
+				TargetPort: intstr.FromInt(targetPort),
 			}},
 
 			Selector: map[string]string{

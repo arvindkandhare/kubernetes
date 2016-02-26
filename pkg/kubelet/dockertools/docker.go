@@ -25,7 +25,6 @@ import (
 	"strings"
 
 	"github.com/docker/docker/pkg/jsonmessage"
-	"github.com/docker/docker/pkg/parsers"
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
@@ -35,13 +34,13 @@ import (
 	"k8s.io/kubernetes/pkg/types"
 	"k8s.io/kubernetes/pkg/util"
 	utilerrors "k8s.io/kubernetes/pkg/util/errors"
+	"k8s.io/kubernetes/pkg/util/parsers"
 )
 
 const (
-	PodInfraContainerName  = leaky.PodInfraContainerName
-	DockerPrefix           = "docker://"
-	PodInfraContainerImage = "beta.gcr.io/google_containers/pause:2.0"
-	LogSuffix              = "log"
+	PodInfraContainerName = leaky.PodInfraContainerName
+	DockerPrefix          = "docker://"
+	LogSuffix             = "log"
 )
 
 const (
@@ -82,6 +81,17 @@ type KubeletContainerName struct {
 	ContainerName string
 }
 
+// containerNamePrefix is used to identify the containers on the node managed by this
+// process.
+var containerNamePrefix = "k8s"
+
+// SetContainerNamePrefix allows the container prefix name for this process to be changed.
+// This is intended to support testing and bootstrapping experimentation. It cannot be
+// changed once the Kubelet starts.
+func SetContainerNamePrefix(prefix string) {
+	containerNamePrefix = prefix
+}
+
 // DockerPuller is an abstract interface for testability.  It abstracts image pull operations.
 type DockerPuller interface {
 	Pull(image string, secrets []api.Secret) error
@@ -115,10 +125,6 @@ func newDockerPuller(client DockerInterface, qps float32, burst int) DockerPulle
 	}
 }
 
-func parseImageName(image string) (string, string) {
-	return parsers.ParseRepositoryTag(image)
-}
-
 func filterHTTPError(err error, image string) error {
 	// docker/docker/pull/11314 prints detailed error info for docker pull.
 	// When it hits 502, it returns a verbose html output including an inline svg,
@@ -136,12 +142,8 @@ func filterHTTPError(err error, image string) error {
 }
 
 func (p dockerPuller) Pull(image string, secrets []api.Secret) error {
-	repoToPull, tag := parseImageName(image)
-
 	// If no tag was specified, use the default "latest".
-	if len(tag) == 0 {
-		tag = "latest"
-	}
+	repoToPull, tag := parsers.ParseImageName(image)
 
 	opts := docker.PullImageOptions{
 		Repository: repoToPull,
@@ -159,6 +161,14 @@ func (p dockerPuller) Pull(image string, secrets []api.Secret) error {
 
 		err := p.client.PullImage(opts, docker.AuthConfiguration{})
 		if err == nil {
+			// Sometimes PullImage failed with no error returned.
+			exist, ierr := p.IsImagePresent(image)
+			if ierr != nil {
+				glog.Warningf("Failed to inspect image %s: %v", image, ierr)
+			}
+			if !exist {
+				return fmt.Errorf("image pull failed for unknown error")
+			}
 			return nil
 		}
 
@@ -189,7 +199,7 @@ func (p dockerPuller) Pull(image string, secrets []api.Secret) error {
 }
 
 func (p throttledDockerPuller) Pull(image string, secrets []api.Secret) error {
-	if p.limiter.CanAccept() {
+	if p.limiter.TryAccept() {
 		return p.puller.Pull(image, secrets)
 	}
 	return fmt.Errorf("pull QPS exceeded.")
@@ -210,18 +220,20 @@ func (p throttledDockerPuller) IsImagePresent(name string) (bool, error) {
 	return p.puller.IsImagePresent(name)
 }
 
-const containerNamePrefix = "k8s"
-
 // Creates a name which can be reversed to identify both full pod name and container name.
-func BuildDockerName(dockerName KubeletContainerName, container *api.Container) (string, string) {
+// This function returns stable name, unique name and an unique id.
+// Although rand.Uint32() is not really unique, but it's enough for us because error will
+// only occur when instances of the same container in the same pod have the same UID. The
+// chance is really slim.
+func BuildDockerName(dockerName KubeletContainerName, container *api.Container) (string, string, string) {
 	containerName := dockerName.ContainerName + "." + strconv.FormatUint(kubecontainer.HashContainer(container), 16)
 	stableName := fmt.Sprintf("%s_%s_%s_%s",
 		containerNamePrefix,
 		containerName,
 		dockerName.PodFullName,
 		dockerName.PodUID)
-
-	return stableName, fmt.Sprintf("%s_%08x", stableName, rand.Uint32())
+	UID := fmt.Sprintf("%08x", rand.Uint32())
+	return stableName, fmt.Sprintf("%s_%s", stableName, UID), UID
 }
 
 // Unpacks a container name, returning the pod full name and container name we would have used to
@@ -276,7 +288,7 @@ func getDockerClient(dockerEndpoint string) (*docker.Client, error) {
 func ConnectToDockerOrDie(dockerEndpoint string) DockerInterface {
 	if dockerEndpoint == "fake://" {
 		return &FakeDockerClient{
-			VersionInfo: docker.Env{"ApiVersion=1.18"},
+			VersionInfo: docker.Env{"ApiVersion=1.18", "Version=1.6.0"},
 		}
 	}
 	client, err := getDockerClient(dockerEndpoint)

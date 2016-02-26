@@ -21,8 +21,8 @@ import (
 	"path"
 
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/latest"
 	"k8s.io/kubernetes/pkg/api/unversioned"
+	"k8s.io/kubernetes/pkg/apimachinery/registered"
 	"k8s.io/kubernetes/pkg/util"
 
 	. "github.com/onsi/ginkgo"
@@ -37,21 +37,22 @@ var _ = Describe("EmptyDir volumes", func() {
 
 	f := NewFramework("emptydir")
 
-	// TODO: Enable security context everywhere and remove skip for FSGroup
-	It("new files should be created with FSGroup ownership when container is root [Conformance] [Skipped]", func() {
-		doTestSetgidFSGroup(f, testImageRootUid, api.StorageMediumMemory)
-	})
+	Context("when FSGroup is specified [Feature:FSGroup]", func() {
+		It("new files should be created with FSGroup ownership when container is root", func() {
+			doTestSetgidFSGroup(f, testImageRootUid, api.StorageMediumMemory)
+		})
 
-	It("new files should be created with FSGroup ownership when container is non-root [Conformance] [Skipped]", func() {
-		doTestSetgidFSGroup(f, testImageNonRootUid, api.StorageMediumMemory)
-	})
+		It("new files should be created with FSGroup ownership when container is non-root", func() {
+			doTestSetgidFSGroup(f, testImageNonRootUid, api.StorageMediumMemory)
+		})
 
-	It("volume on default medium should have the correct mode using FSGroup [Conformance] [Skipped]", func() {
-		doTestVolumeModeFSGroup(f, testImageRootUid, api.StorageMediumDefault)
-	})
+		It("volume on default medium should have the correct mode using FSGroup", func() {
+			doTestVolumeModeFSGroup(f, testImageRootUid, api.StorageMediumDefault)
+		})
 
-	It("volume on tmpfs should have the correct mode using FSGroup [Conformance] [Skipped]", func() {
-		doTestVolumeModeFSGroup(f, testImageRootUid, api.StorageMediumMemory)
+		It("volume on tmpfs should have the correct mode using FSGroup", func() {
+			doTestVolumeModeFSGroup(f, testImageRootUid, api.StorageMediumMemory)
+		})
 	})
 
 	It("volume on tmpfs should have the correct mode [Conformance]", func() {
@@ -311,7 +312,7 @@ func testPodWithVolume(image, path string, source *api.EmptyDirVolumeSource) *ap
 	return &api.Pod{
 		TypeMeta: unversioned.TypeMeta{
 			Kind:       "Pod",
-			APIVersion: latest.GroupOrDie("").Version,
+			APIVersion: registered.GroupOrDie(api.GroupName).GroupVersion.String(),
 		},
 		ObjectMeta: api.ObjectMeta{
 			Name: podName,

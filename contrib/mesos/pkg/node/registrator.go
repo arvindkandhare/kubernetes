@@ -20,12 +20,13 @@ import (
 	"fmt"
 	"time"
 
+	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+
 	log "github.com/golang/glog"
 	"k8s.io/kubernetes/contrib/mesos/pkg/queue"
 	"k8s.io/kubernetes/contrib/mesos/pkg/runtime"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/api/errors"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
 type Registrator interface {
@@ -62,11 +63,11 @@ type LookupFunc func(hostName string) *api.Node
 
 type clientRegistrator struct {
 	lookupNode LookupFunc
-	client     *client.Client
+	client     *clientset.Clientset
 	queue      *queue.HistoricalFIFO
 }
 
-func NewRegistrator(client *client.Client, lookupNode LookupFunc) *clientRegistrator {
+func NewRegistrator(client *clientset.Clientset, lookupNode LookupFunc) *clientRegistrator {
 	return &clientRegistrator{
 		lookupNode: lookupNode,
 		client:     client,
@@ -78,7 +79,7 @@ func (r *clientRegistrator) Run(terminate <-chan struct{}) error {
 	loop := func() {
 	RegistrationLoop:
 		for {
-			obj := r.queue.CancelablePop(terminate)
+			obj := r.queue.Pop(terminate)
 			if obj == nil {
 				break RegistrationLoop
 			}
@@ -96,16 +97,16 @@ func (r *clientRegistrator) Run(terminate <-chan struct{}) error {
 
 			if n == nil {
 				log.V(2).Infof("creating node %s with labels %v", rg.hostName, rg.labels)
-				_, err := CreateOrUpdate(r.client, rg.hostName, rg.labels)
+				_, err := CreateOrUpdate(r.client, rg.hostName, rg.labels, nil)
 				if err != nil {
 					log.Errorf("error creating the node %s: %v", rg.hostName, rg.labels)
 				}
 			} else {
 				log.V(2).Infof("updating node %s with labels %v", rg.hostName, rg.labels)
-				_, err := Update(r.client, n, rg.labels)
+				_, err := Update(r.client, rg.hostName, rg.labels, nil)
 				if err != nil && errors.IsNotFound(err) {
 					// last chance when our store was out of date
-					_, err = Create(r.client, rg.hostName, rg.labels)
+					_, err = Create(r.client, rg.hostName, rg.labels, nil)
 				}
 				if err != nil {
 					log.Errorf("error updating the node %s: %v", rg.hostName, rg.labels)

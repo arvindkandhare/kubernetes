@@ -1,4 +1,4 @@
-# Copyright 2015 Google Inc. All rights reserved.
+# Copyright 2016 The Kubernetes Authors All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,9 @@
 
 FROM alpine:3.2
 
+# install necessary packages:
+# - curl, nc: used by a lot of e2e tests
+# - iproute2: includes ss used in NodePort tests
 run apk --update add curl netcat-openbsd iproute2 && rm -rf /var/cache/apk/*
 
 # wait forever

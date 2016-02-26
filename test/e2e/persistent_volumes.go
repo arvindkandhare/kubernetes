@@ -28,10 +28,9 @@ import (
 	client "k8s.io/kubernetes/pkg/client/unversioned"
 )
 
-// Marked with [Skipped] to skip the test by default (see driver.go),
-// the test needs privileged containers, which are disabled by default.
-// Run the test with "go run hack/e2e.go ... --ginkgo.focus=PersistentVolume"
-var _ = Describe("[Skipped] persistentVolumes", func() {
+// This test needs privileged containers, which are disabled by default.  Run
+// the test with "go run hack/e2e.go ... --ginkgo.focus=[Feature:Volumes]"
+var _ = Describe("PersistentVolumes [Feature:Volumes]", func() {
 	framework := NewFramework("pv")
 	var c *client.Client
 	var ns string
@@ -41,7 +40,7 @@ var _ = Describe("[Skipped] persistentVolumes", func() {
 		ns = framework.Namespace.Name
 	})
 
-	It("PersistentVolume", func() {
+	It("NFS volume can be created, bound, retrieved, unbound, and used by a pod", func() {
 		config := VolumeTestConfig{
 			namespace:   ns,
 			prefix:      "nfs",
@@ -153,7 +152,7 @@ func makeCheckPod(ns string, nfsserver string) *api.Pod {
 	return &api.Pod{
 		TypeMeta: unversioned.TypeMeta{
 			Kind:       "Pod",
-			APIVersion: testapi.Default.Version(),
+			APIVersion: testapi.Default.GroupVersion().String(),
 		},
 		ObjectMeta: api.ObjectMeta{
 			GenerateName: "checker-",
@@ -163,7 +162,7 @@ func makeCheckPod(ns string, nfsserver string) *api.Pod {
 			Containers: []api.Container{
 				{
 					Name:    "scrub-checker",
-					Image:   "gcr.io/google_containers/busybox",
+					Image:   "gcr.io/google_containers/busybox:1.24",
 					Command: []string{"/bin/sh"},
 					Args:    []string{"-c", "test ! -e /mnt/index.html || exit 1"},
 					VolumeMounts: []api.VolumeMount{

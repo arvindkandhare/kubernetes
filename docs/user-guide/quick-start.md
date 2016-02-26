@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/quick-start.md).
@@ -90,6 +91,11 @@ my-nginx     10.179.240.1     25.1.2.3          80/TCP                 run=nginx
 You may need to wait for a minute or two for the external ip address to be provisioned.
 
 In order to access your nginx landing page, you also have to make sure that traffic from external IPs is allowed. Do this by opening a [firewall to allow traffic on port 80](services-firewalls.md).
+
+If you're running on AWS, Kubernetes creates an ELB for you.  ELBs use host
+names, not IPs, so you will have to do `kubectl describe svc my-nginx` and look
+for the `LoadBalancer Ingress` host name.  Traffic from external IPs is allowed
+automatically.
 
 ## Killing the application
 

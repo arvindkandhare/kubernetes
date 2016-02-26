@@ -26,6 +26,8 @@ import (
 	annotation "k8s.io/kubernetes/contrib/mesos/pkg/scheduler/meta"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/podtask"
 	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/runtime"
 )
 
 type Binder interface {
@@ -98,8 +100,11 @@ func (b *binder) bind(ctx api.Context, binding *api.Binding, task *podtask.T) (e
 	}
 
 	if err = b.prepareTaskForLaunch(ctx, binding.Target.Name, task, offerId); err == nil {
-		log.V(2).Infof("launching task: %q on target %q slave %q for pod \"%v/%v\", cpu %.2f, mem %.2f MB",
-			task.ID, binding.Target.Name, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name, task.Spec.CPU, task.Spec.Memory)
+		log.V(2).Infof(
+			"launching task: %q on target %q slave %q for pod \"%v/%v\", resources %v",
+			task.ID, binding.Target.Name, task.Spec.SlaveID, task.Pod.Namespace, task.Pod.Name, task.Spec.Resources,
+		)
+
 		if err = b.sched.LaunchTask(task); err == nil {
 			b.sched.Offers().Invalidate(offerId)
 			task.Set(podtask.Launched)
@@ -147,7 +152,7 @@ func (b *binder) prepareTaskForLaunch(ctx api.Context, machine string, task *pod
 	// the kubelet-executor uses this to instantiate the pod
 	log.V(3).Infof("prepared pod spec: %+v", pod)
 
-	data, err := api.Codec.Encode(&pod)
+	data, err := runtime.Encode(api.Codecs.LegacyCodec(v1.SchemeGroupVersion), &pod)
 	if err != nil {
 		log.V(2).Infof("Failed to marshal the pod spec: %v", err)
 		return err

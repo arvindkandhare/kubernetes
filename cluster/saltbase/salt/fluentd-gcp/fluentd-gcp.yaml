@@ -3,10 +3,13 @@ kind: Pod
 metadata:
   name: fluentd-cloud-logging
   namespace: kube-system
+  labels:
+    k8s-app: fluentd-logging
 spec:
+  dnsPolicy: Default
   containers:
   - name: fluentd-cloud-logging
-    image: gcr.io/google_containers/fluentd-gcp:1.14
+    image: gcr.io/google_containers/fluentd-gcp:1.16
     resources:
       limits:
         cpu: 100m

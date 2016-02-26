@@ -38,10 +38,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
+                value: WMGY/zxYadw7ilRVDlxvcHz6vQ+dZmELNWs6D5MB
           
               - name:  S3_HOST
-                value: 104.197.81.157
+                value: 8.35.196.221
           
               - name: S3_PORT
                 value: "9020"
@@ -94,7 +94,7 @@ spec:
               - name: QUEUE_DONE
                 value: mosaic-done
           securityContext:
-              Privileged: true
+              privileged: true
 
           ports:
 #          - containerPort: 5000
@@ -111,7 +111,7 @@ spec:
           image:   emccode/mosaicme-collector
           args:    ["celery", "-A", "tasks", "worker", "--loglevel=info"]
           securityContext:
-              Privileged: true
+              privileged: true
           env:
                - name:   TWITTER_CONSUMER_KEY
                  value:  4oxzHFJ7PXsAA7hAeLk6qzEgj
@@ -134,10 +134,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
+                 value: WMGY/zxYadw7ilRVDlxvcHz6vQ+dZmELNWs6D5MB
            
                - name:  S3_HOST
-                 value: 104.197.81.157
+                 value: 8.35.196.221
            
                - name: S3_PORT
                  value: "9020"
@@ -214,10 +214,10 @@ spec:
                 value: emccode
           
               - name:  S3_SECRET_KEY
-                value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
+                value: WMGY/zxYadw7ilRVDlxvcHz6vQ+dZmELNWs6D5MB
           
               - name:  S3_HOST
-                value: 104.197.176.133
+                value: 8.35.196.221
           
               - name: S3_PORT
                 value: "9020"
@@ -270,7 +270,7 @@ spec:
               - name: QUEUE_DONE
                 value: mosaic-done
           securityContext:
-              Privileged: true
+              privileged: true
 
           ports:
 #          - containerPort: 5000
@@ -287,7 +287,7 @@ spec:
           image:   arvindkandhare/mosaicme-collector
           env:
                   - name:   MOSAIC_LISTEN_HASHTAG
-                    value:  NationalComingOutDay
+                    value:  Dockercon,DockerConEU,MosaicMe
  
                   - name:   MOSAIC_BUCKET
                     value:  mosaic-in
@@ -315,10 +315,10 @@ spec:
                     value: emccode
                
                   - name:  S3_SECRET_KEY
-                    value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
+                    value: WMGY/zxYadw7ilRVDlxvcHz6vQ+dZmELNWs6D5MB
                
                   - name:  S3_HOST
-                    value: 104.197.81.157
+                    value: 8.35.196.221
                
                   - name: S3_PORT
                     value: "9020"
@@ -402,10 +402,10 @@ spec:
                  value: emccode
            
                - name:  S3_SECRET_KEY
-                 value: 11ufEWItiQhcVXEjyG0k/Poz777BbDuurnOEhpts
+                 value: WMGY/zxYadw7ilRVDlxvcHz6vQ+dZmELNWs6D5MB
            
                - name:  S3_HOST
-                 value: 104.197.176.133
+                 value: 8.35.196.221
            
                - name: S3_PORT
                  value: "9020"

@@ -13,9 +13,15 @@ base:
   'roles:kubernetes-pool':
     - match: grain
     - docker
+{% if pillar.get('network_provider', '').lower() == 'flannel' %}
+    - flannel
+{% elif pillar.get('network_provider', '').lower() == 'kubenet' %}
+    - cni
+{% endif %}
     - helpers
     - cadvisor
     - kube-client-tools
+    - kube-node-unpacker
     - kubelet
 {% if pillar.get('network_provider', '').lower() == 'opencontrail' %}
     - opencontrail-networking-minion
@@ -39,11 +45,17 @@ base:
     - match: grain
     - generate-cert
     - etcd
+{% if pillar.get('network_provider', '').lower() == 'flannel' %}
+    - flannel-server
+    - flannel
+{% elif pillar.get('network_provider', '').lower() == 'kubenet' %}
+    - cni
+{% endif %}
     - kube-apiserver
     - kube-controller-manager
     - kube-scheduler
     - supervisor
-{% if grains['cloud'] is defined and not grains.cloud in [ 'aws', 'gce', 'vagrant' ] %}
+{% if grains['cloud'] is defined and not grains.cloud in [ 'aws', 'gce', 'vagrant', 'vsphere'] %}
     - nginx
 {% endif %}
     - cadvisor
@@ -61,7 +73,7 @@ base:
     - logrotate
 {% endif %}
     - kube-addons
-{% if grains['cloud'] is defined and grains['cloud'] in [ 'vagrant', 'gce', 'aws' ] %}
+{% if grains['cloud'] is defined and grains['cloud'] in [ 'vagrant', 'gce', 'aws', 'vsphere' ] %}
     - docker
     - kubelet
 {% endif %}

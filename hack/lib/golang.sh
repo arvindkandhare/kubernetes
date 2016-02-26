@@ -50,6 +50,7 @@ readonly KUBE_SERVER_BINARIES=("${KUBE_SERVER_TARGETS[@]##*/}")
 # The server platform we are building on.
 readonly KUBE_SERVER_PLATFORMS=(
   linux/amd64
+  linux/arm
 )
 
 # The set of client targets that we are building for all platforms
@@ -58,6 +59,18 @@ readonly KUBE_CLIENT_TARGETS=(
 )
 readonly KUBE_CLIENT_BINARIES=("${KUBE_CLIENT_TARGETS[@]##*/}")
 readonly KUBE_CLIENT_BINARIES_WIN=("${KUBE_CLIENT_BINARIES[@]/%/.exe}")
+
+# If we update this we should also update the set of golang compilers we build
+# in 'build/build-image/cross/Dockerfile'. However, it's only a bit faster since go 1.5, not mandatory 
+readonly KUBE_CLIENT_PLATFORMS=(
+  linux/amd64
+  linux/386
+  linux/arm
+  darwin/amd64
+  darwin/386
+  windows/amd64
+  windows/386
+)
 
 # The set of test targets that we are building for all platforms
 kube::golang::test_targets() {
@@ -74,6 +87,7 @@ kube::golang::test_targets() {
     examples/k8petstore/web-server/src
     github.com/onsi/ginkgo/ginkgo
     test/e2e/e2e.test
+    test/e2e_node/e2e_node.test
   )
   if [ -n "${KUBERNETES_CONTRIB:-}" ]; then
     for contrib in "${KUBERNETES_CONTRIB}"; do
@@ -86,8 +100,7 @@ readonly KUBE_TEST_TARGETS=($(kube::golang::test_targets))
 readonly KUBE_TEST_BINARIES=("${KUBE_TEST_TARGETS[@]##*/}")
 readonly KUBE_TEST_BINARIES_WIN=("${KUBE_TEST_BINARIES[@]/%/.exe}")
 readonly KUBE_TEST_PORTABLE=(
-  test/images/network-tester/rc.json
-  test/images/network-tester/service.json
+  test/e2e/testing-manifests
   test/kubemark
   hack/e2e.go
   hack/e2e-internal
@@ -96,22 +109,19 @@ readonly KUBE_TEST_PORTABLE=(
   hack/lib
 )
 
-# If we update this we need to also update the set of golang compilers we build
-# in 'build/build-image/Dockerfile'
-readonly KUBE_CLIENT_PLATFORMS=(
+# Which platforms we should compile test targets for. Not all client platforms need these tests
+readonly KUBE_TEST_PLATFORMS=(
   linux/amd64
-  linux/386
-  linux/arm
   darwin/amd64
-  darwin/386
   windows/amd64
+  linux/arm
 )
 
 # Gigabytes desired for parallel platform builds. 11 is fairly
 # arbitrary, but is a reasonable splitting point for 2015
 # laptops-versus-not.
 #
-# If you are using boot2docker, the following seems to work (note 
+# If you are using boot2docker, the following seems to work (note
 # that 12000 rounds to 11G):
 #   boot2docker down
 #   VBoxManage modifyvm boot2docker-vm --memory 12000
@@ -129,6 +139,8 @@ readonly KUBE_STATIC_LIBRARIES=(
   kube-apiserver
   kube-controller-manager
   kube-scheduler
+  kube-proxy
+  kubectl
 )
 
 kube::golang::is_statically_linked_library() {
@@ -158,7 +170,7 @@ kube::golang::binaries_from_targets() {
   done
 }
 
-# Asks golang what it thinks the host platform is.  The go tool chain does some
+# Asks golang what it thinks the host platform is. The go tool chain does some
 # slightly different things when the target platform matches the host platform.
 kube::golang::host_platform() {
   echo "$(go env GOHOSTOS)/$(go env GOHOSTARCH)"
@@ -187,11 +199,26 @@ kube::golang::set_platform_envs() {
 
   export GOOS=${platform%/*}
   export GOARCH=${platform##*/}
+
+  # Dynamic CGO linking for other server architectures than linux/amd64 goes here
+  # If you want to include support for more server platforms than these, add arch-specific gcc names here
+  if [[ ${platform} == "linux/arm" ]]; then
+    export CGO_ENABLED=1
+    export CC=arm-linux-gnueabi-gcc
+  elif [[ ${platform} == "linux/arm64" ]]; then
+    export CGO_ENABLED=1
+    export CC=aarch64-linux-gnu-gcc
+  elif [[ ${platform} == "linux/ppc64le" ]]; then
+    export CGO_ENABLED=1
+    export CC=powerpc64le-linux-gnu-gcc
+  fi
 }
 
 kube::golang::unset_platform_envs() {
   unset GOOS
   unset GOARCH
+  unset CGO_ENABLED
+  unset CC
 }
 
 # Create the GOPATH tree under $KUBE_OUTPUT
@@ -238,12 +265,12 @@ EOF
   if [[ "${TRAVIS:-}" != "true" ]]; then
     local go_version
     go_version=($(go version))
-    if [[ "${go_version[2]}" < "go1.2" ]]; then
+    if [[ "${go_version[2]}" < "go1.4" ]]; then
       kube::log::usage_from_stdin <<EOF
 
 Detected go version: ${go_version[*]}.
-Kubernetes requires go version 1.2 or greater.
-Please install Go version 1.2 or later.
+Kubernetes requires go version 1.4 or greater.
+Please install Go version 1.4 or later.
 
 EOF
       exit 2
@@ -406,6 +433,7 @@ kube::golang::build_binaries_for_platform() {
     # Go 1.4 added -o to control where the binary is saved, but Go 1.3 doesn't
     # have this flag. Whenever we deprecate go 1.3, update to use -o instead of
     # changing into the output directory.
+    mkdir -p "$(dirname ${outfile})"
     pushd "$(dirname ${outfile})" >/dev/null
     go test -c \
       "${goflags[@]:+${goflags[@]}}" \
@@ -415,9 +443,15 @@ kube::golang::build_binaries_for_platform() {
   done
 }
 
-# Return approximate physical memory in gigabytes.
+# Return approximate physical memory available in gigabytes.
 kube::golang::get_physmem() {
   local mem
+
+  # Linux kernel version >=3.14, in kb
+  if mem=$(grep MemAvailable /proc/meminfo | awk '{ print $2 }'); then
+    echo $(( ${mem} / 1048576 ))
+    return
+  fi
 
   # Linux, in kb
   if mem=$(grep MemTotal /proc/meminfo | awk '{ print $2 }'); then

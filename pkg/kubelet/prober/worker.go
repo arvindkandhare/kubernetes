@@ -17,14 +17,15 @@ limitations under the License.
 package prober
 
 import (
+	"math/rand"
 	"time"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
-	kubeletutil "k8s.io/kubernetes/pkg/kubelet/util"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/kubelet/util/format"
+	"k8s.io/kubernetes/pkg/util/runtime"
 )
 
 // worker handles the periodic probing of its assigned container. Each worker has a go-routine
@@ -32,8 +33,8 @@ import (
 // stop channel is closed. The worker uses the probe Manager's statusManager to get up-to-date
 // container IDs.
 type worker struct {
-	// Channel for stopping the probe, it should be closed to trigger a stop.
-	stop chan struct{}
+	// Channel for stopping the probe.
+	stopCh chan struct{}
 
 	// The pod containing this probe (read-only)
 	pod *api.Pod
@@ -70,7 +71,7 @@ func newWorker(
 	container api.Container) *worker {
 
 	w := &worker{
-		stop:         make(chan struct{}),
+		stopCh:       make(chan struct{}, 1), // Buffer so stop() can be non-blocking.
 		pod:          pod,
 		container:    container,
 		probeType:    probeType,
@@ -93,7 +94,8 @@ func newWorker(
 
 // run periodically probes the container.
 func (w *worker) run() {
-	probeTicker := time.NewTicker(time.Duration(w.spec.PeriodSeconds) * time.Second)
+	probeTickerPeriod := time.Duration(w.spec.PeriodSeconds) * time.Second
+	probeTicker := time.NewTicker(probeTickerPeriod)
 
 	defer func() {
 		// Clean up.
@@ -105,11 +107,15 @@ func (w *worker) run() {
 		w.probeManager.removeWorker(w.pod.UID, w.container.Name, w.probeType)
 	}()
 
+	// If kubelet restarted the probes could be started in rapid succession.
+	// Let the worker wait for a random portion of tickerPeriod before probing.
+	time.Sleep(time.Duration(rand.Float64() * float64(probeTickerPeriod)))
+
 probeLoop:
 	for w.doProbe() {
 		// Wait for next probe tick.
 		select {
-		case <-w.stop:
+		case <-w.stopCh:
 			break probeLoop
 		case <-probeTicker.C:
 			// continue
@@ -117,30 +123,39 @@ probeLoop:
 	}
 }
 
+// stop stops the probe worker. The worker handles cleanup and removes itself from its manager.
+// It is safe to call stop multiple times.
+func (w *worker) stop() {
+	select {
+	case w.stopCh <- struct{}{}:
+	default: // Non-blocking.
+	}
+}
+
 // doProbe probes the container once and records the result.
 // Returns whether the worker should continue.
 func (w *worker) doProbe() (keepGoing bool) {
-	defer util.HandleCrash(func(_ interface{}) { keepGoing = true })
+	defer runtime.HandleCrash(func(_ interface{}) { keepGoing = true })
 
 	status, ok := w.probeManager.statusManager.GetPodStatus(w.pod.UID)
 	if !ok {
 		// Either the pod has not been created yet, or it was already deleted.
-		glog.V(3).Infof("No status for pod: %v", kubeletutil.FormatPodName(w.pod))
+		glog.V(3).Infof("No status for pod: %v", format.Pod(w.pod))
 		return true
 	}
 
 	// Worker should terminate if pod is terminated.
 	if status.Phase == api.PodFailed || status.Phase == api.PodSucceeded {
 		glog.V(3).Infof("Pod %v %v, exiting probe worker",
-			kubeletutil.FormatPodName(w.pod), status.Phase)
+			format.Pod(w.pod), status.Phase)
 		return false
 	}
 
 	c, ok := api.GetContainerStatus(status.ContainerStatuses, w.container.Name)
-	if !ok {
+	if !ok || len(c.ContainerID) == 0 {
 		// Either the container has not been created yet, or it was deleted.
-		glog.V(3).Infof("Non-existant container probed: %v - %v",
-			kubeletutil.FormatPodName(w.pod), w.container.Name)
+		glog.V(3).Infof("Probe target container not found: %v - %v",
+			format.Pod(w.pod), w.container.Name)
 		return true // Wait for more information.
 	}
 
@@ -154,7 +169,7 @@ func (w *worker) doProbe() (keepGoing bool) {
 
 	if c.State.Running == nil {
 		glog.V(3).Infof("Non-running container probed: %v - %v",
-			kubeletutil.FormatPodName(w.pod), w.container.Name)
+			format.Pod(w.pod), w.container.Name)
 		if !w.containerID.IsEmpty() {
 			w.resultsManager.Set(w.containerID, results.Failure, w.pod)
 		}
@@ -163,7 +178,7 @@ func (w *worker) doProbe() (keepGoing bool) {
 			w.pod.Spec.RestartPolicy != api.RestartPolicyNever
 	}
 
-	if int64(time.Since(c.State.Running.StartedAt.Time).Seconds()) < w.spec.InitialDelaySeconds {
+	if int(time.Since(c.State.Running.StartedAt.Time).Seconds()) < w.spec.InitialDelaySeconds {
 		return true
 	}
 

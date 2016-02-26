@@ -19,11 +19,13 @@ package deleter
 import (
 	"testing"
 
+	"github.com/mesos/mesos-go/mesosproto"
 	"github.com/stretchr/testify/assert"
 	"k8s.io/kubernetes/contrib/mesos/pkg/queue"
 	types "k8s.io/kubernetes/contrib/mesos/pkg/scheduler"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/errors"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/podtask"
+	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/podtask/hostport"
 	"k8s.io/kubernetes/contrib/mesos/pkg/scheduler/queuer"
 	"k8s.io/kubernetes/pkg/api"
 )
@@ -60,7 +62,15 @@ func TestDeleteOne_PendingPod(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task, err := podtask.New(api.NewDefaultContext(), "bar", pod.Pod)
+	task, err := podtask.New(
+		api.NewDefaultContext(),
+		podtask.Config{
+			ID:               "bar",
+			Prototype:        &mesosproto.ExecutorInfo{},
+			HostPortStrategy: hostport.StrategyWildcard,
+		},
+		pod.Pod,
+	)
 	if err != nil {
 		t.Fatalf("failed to create task: %v", err)
 	}
@@ -100,7 +110,15 @@ func TestDeleteOne_Running(t *testing.T) {
 			UID:       "foo0",
 			Namespace: api.NamespaceDefault,
 		}}}
-	task, err := podtask.New(api.NewDefaultContext(), "bar", pod.Pod)
+	task, err := podtask.New(
+		api.NewDefaultContext(),
+		podtask.Config{
+			ID:               "bar",
+			Prototype:        &mesosproto.ExecutorInfo{},
+			HostPortStrategy: hostport.StrategyWildcard,
+		},
+		pod.Pod,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

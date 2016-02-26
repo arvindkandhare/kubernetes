@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/getting-started-guides/juju.md).
@@ -68,7 +69,7 @@ local Ubuntu system:
 
     sudo add-apt-repository ppa:juju/stable
     sudo apt-get update
-    sudo apt-get install juju-core juju-quickstart
+    sudo apt-get install juju-core juju-quickstart juju-deployer
 
 
 ### With Docker

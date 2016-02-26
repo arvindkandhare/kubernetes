@@ -117,7 +117,7 @@ public class KubernetesSeedProvider implements SeedProvider {
             logger.info("Getting endpoints from " + url);
             HttpsURLConnection conn = (HttpsURLConnection)url.openConnection();
 
-            // TODO: Remove this once the CA cert is propogated everywhere, and replace
+            // TODO: Remove this once the CA cert is propagated everywhere, and replace
             // with loading the CA cert.
             conn.setSSLSocketFactory(ctx.getSocketFactory());
             conn.setHostnameVerifier(trustAllHosts);
@@ -129,8 +129,10 @@ public class KubernetesSeedProvider implements SeedProvider {
                 // Here is a problem point, endpoints.subsets can be null in first node cases.
                 if (endpoints.subsets != null && !endpoints.subsets.isEmpty()){
                     for (Subset subset : endpoints.subsets) {
-                        for (Address address : subset.addresses) {
-                            list.add(InetAddress.getByName(address.ip));
+                        if (subset.addresses != null && !subset.addresses.isEmpty()) {
+                            for (Address address : subset.addresses) {
+                                list.add(InetAddress.getByName(address.ip));
+                            }
                         }
                     }
                 }

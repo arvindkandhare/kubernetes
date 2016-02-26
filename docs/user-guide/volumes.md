@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/volumes.md).
@@ -65,6 +66,8 @@ Familiarity with [pods](pods.md) is suggested.
     - [secret](#secret)
     - [persistentVolumeClaim](#persistentvolumeclaim)
     - [downwardAPI](#downwardapi)
+    - [FlexVolume](#flexvolume)
+    - [AzureFileVolume](#azurefilevolume)
   - [Resources](#resources)
 
 <!-- END MUNGE: GENERATED_TOC -->
@@ -122,6 +125,7 @@ Kubernetes supports several types of Volumes:
    * `secret`
    * `persistentVolumeClaim`
    * `downwardAPI`
+   * `azureFileVolume`
 
 We welcome additional contributions.
 
@@ -138,7 +142,7 @@ volume is safe across container crashes.
 
 Some uses for an `emptyDir` are:
 
-* scratch space, such as for a disk-based mergesortcw
+* scratch space, such as for a disk-based merge sort
 * checkpointing a long computation for recovery from crashes
 * holding files that a content-manager container fetches while a webserver
   container serves the data
@@ -272,11 +276,9 @@ spec:
   - name: test-volume
     # This AWS EBS volume must already exist.
     awsElasticBlockStore:
-      volumeID: aws://<availability-zone>/<volume-id>
+      volumeID: <volume-id>
       fsType: ext4
 ```
-
-(Note: the syntax of volumeID is currently awkward; #10181 fixes it)
 
 ### nfs
 
@@ -317,8 +319,8 @@ See the [iSCSI example](../../examples/iscsi/) for more details.
 and orchestration of data volumes backed by a variety of storage backends.
 
 A `flocker` volume allows a Flocker dataset to be mounted into a pod. If the
-dataset does not already exist in Flocker, it needs to be created with Flocker
-CLI or the using the Flocker API. If the dataset already exists it will
+dataset does not already exist in Flocker, it needs to be first created with the Flocker
+CLI or by using the Flocker API. If the dataset already exists it will be
 reattached by Flocker to the node that the pod is scheduled. This means data
 can be "handed off" between pods as required.
 
@@ -419,6 +421,21 @@ It mounts a directory and writes the requested data in plain text files.
 
 See the [`downwardAPI` volume example](downward-api/volume/README.md)  for more details.
 
+### FlexVolume
+
+A `FlexVolume` enables users to mount vendor volumes into a pod. It expects vendor
+drivers are installed in the volume plugin path on each kubelet node. This is
+an alpha feature and may change in future.
+
+More details are in [here](../../examples/flexvolume/README.md)
+
+### AzureFileVolume
+
+A `AzureFileVolume` is used to mount a Microsoft Azure File Volume (SMB 2.1 and 3.0)
+into a Pod.
+
+More details can be found [here](../../examples/azure_file/README.md)
+
 ## Resources
 
 The storage media (Disk, SSD, etc) of an `emptyDir` volume is determined by the
@@ -431,7 +448,6 @@ In the future, we expect that `emptyDir` and `hostPath` volumes will be able to
 request a certain amount of space using a [resource](compute-resources.md)
 specification, and to select the type of media to use, for clusters that have
 several media types.
-
 
 <!-- BEGIN MUNGE: GENERATED_ANALYTICS -->
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/docs/user-guide/volumes.md?pixel)]()

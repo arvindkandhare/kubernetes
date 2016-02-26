@@ -13,5 +13,5 @@ for hostname in `gcloud compute instances list | grep minion|cut -f 1 -d " "`; d
 done
 
 kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-service.yaml
-kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-controller.yaml --validate=false
+kubectl.sh create -f examples/ecs_deploy/mosaicme/mosaicweb-controller.yaml 
 

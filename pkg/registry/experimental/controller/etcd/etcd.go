@@ -23,13 +23,14 @@ import (
 	"k8s.io/kubernetes/pkg/api/errors"
 	"k8s.io/kubernetes/pkg/api/rest"
 	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/storage"
 
 	"k8s.io/kubernetes/pkg/registry/controller"
 	"k8s.io/kubernetes/pkg/registry/controller/etcd"
 	"k8s.io/kubernetes/pkg/registry/generic"
 
 	"k8s.io/kubernetes/pkg/apis/extensions"
+
+	extvalidation "k8s.io/kubernetes/pkg/apis/extensions/validation"
 )
 
 // Container includes dummy storage for RC pods and experimental storage for Scale.
@@ -38,9 +39,9 @@ type ContainerStorage struct {
 	Scale                 *ScaleREST
 }
 
-func NewStorage(s storage.Interface, storageDecorator generic.StorageDecorator) ContainerStorage {
+func NewStorage(opts generic.RESTOptions) ContainerStorage {
 	// scale does not set status, only updates spec so we ignore the status
-	controllerREST, _ := etcd.NewREST(s, storageDecorator)
+	controllerREST, _ := etcd.NewREST(opts)
 	rcRegistry := controller.NewRegistry(controllerREST)
 
 	return ContainerStorage{
@@ -64,7 +65,7 @@ func (r *ScaleREST) New() runtime.Object {
 func (r *ScaleREST) Get(ctx api.Context, name string) (runtime.Object, error) {
 	rc, err := (*r.registry).GetController(ctx, name)
 	if err != nil {
-		return nil, errors.NewNotFound("scale", name)
+		return nil, errors.NewNotFound(extensions.Resource("replicationcontrollers/scale"), name)
 	}
 	return &extensions.Scale{
 		ObjectMeta: api.ObjectMeta{
@@ -90,14 +91,19 @@ func (r *ScaleREST) Update(ctx api.Context, obj runtime.Object) (runtime.Object,
 	if !ok {
 		return nil, false, errors.NewBadRequest(fmt.Sprintf("wrong object passed to Scale update: %v", obj))
 	}
+
+	if errs := extvalidation.ValidateScale(scale); len(errs) > 0 {
+		return nil, false, errors.NewInvalid(extensions.Kind("Scale"), scale.Name, errs)
+	}
+
 	rc, err := (*r.registry).GetController(ctx, scale.Name)
 	if err != nil {
-		return nil, false, errors.NewNotFound("scale", scale.Name)
+		return nil, false, errors.NewNotFound(extensions.Resource("replicationcontrollers/scale"), scale.Name)
 	}
 	rc.Spec.Replicas = scale.Spec.Replicas
 	rc, err = (*r.registry).UpdateController(ctx, rc)
 	if err != nil {
-		return nil, false, errors.NewConflict("scale", scale.Name, err)
+		return nil, false, errors.NewConflict(extensions.Resource("replicationcontrollers/scale"), scale.Name, err)
 	}
 	return &extensions.Scale{
 		ObjectMeta: api.ObjectMeta{

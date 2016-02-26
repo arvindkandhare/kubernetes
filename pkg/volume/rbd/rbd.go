@@ -22,9 +22,9 @@ import (
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
 	"k8s.io/kubernetes/pkg/types"
-	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/exec"
 	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/kubernetes/pkg/util/strings"
 	"k8s.io/kubernetes/pkg/volume"
 )
 
@@ -45,8 +45,9 @@ const (
 	rbdPluginName = "kubernetes.io/rbd"
 )
 
-func (plugin *rbdPlugin) Init(host volume.VolumeHost) {
+func (plugin *rbdPlugin) Init(host volume.VolumeHost) error {
 	plugin.host = host
+	return nil
 }
 
 func (plugin *rbdPlugin) Name() string {
@@ -83,7 +84,7 @@ func (plugin *rbdPlugin) NewBuilder(spec *volume.Spec, pod *api.Pod, _ volume.Vo
 			return nil, fmt.Errorf("Cannot get kube client")
 		}
 
-		secretName, err := kubeClient.Secrets(pod.Namespace).Get(source.SecretRef.Name)
+		secretName, err := kubeClient.Core().Secrets(pod.Namespace).Get(source.SecretRef.Name)
 		if err != nil {
 			glog.Errorf("Couldn't get secret %v/%v", pod.Namespace, source.SecretRef)
 			return nil, err
@@ -154,7 +155,7 @@ func (plugin *rbdPlugin) newCleanerInternal(volName string, podUID types.UID, ma
 				podUID:  podUID,
 				volName: volName,
 				manager: manager,
-				mounter: mounter,
+				mounter: &mount.SafeFormatAndMount{mounter, exec.New()},
 				plugin:  plugin,
 			},
 			Mon: make([]string, 0),
@@ -169,15 +170,16 @@ type rbd struct {
 	Image    string
 	ReadOnly bool
 	plugin   *rbdPlugin
-	mounter  mount.Interface
+	mounter  *mount.SafeFormatAndMount
 	// Utility interface that provides API calls to the provider to attach/detach disks.
 	manager diskManager
+	volume.MetricsNil
 }
 
 func (rbd *rbd) GetPath() string {
 	name := rbdPluginName
 	// safe to use PodVolumeDir now: volume teardown occurs before pod is cleaned up
-	return rbd.plugin.host.GetPodVolumeDir(rbd.podUID, util.EscapeQualifiedNameForDisk(name), rbd.volName)
+	return rbd.plugin.host.GetPodVolumeDir(rbd.podUID, strings.EscapeQualifiedNameForDisk(name), rbd.volName)
 }
 
 type rbdBuilder struct {
@@ -192,17 +194,21 @@ type rbdBuilder struct {
 
 var _ volume.Builder = &rbdBuilder{}
 
-func (_ *rbdBuilder) SupportsOwnershipManagement() bool {
-	return true
+func (b *rbd) GetAttributes() volume.Attributes {
+	return volume.Attributes{
+		ReadOnly:        b.ReadOnly,
+		Managed:         !b.ReadOnly,
+		SupportsSELinux: true,
+	}
 }
 
-func (b *rbdBuilder) SetUp() error {
-	return b.SetUpAt(b.GetPath())
+func (b *rbdBuilder) SetUp(fsGroup *int64) error {
+	return b.SetUpAt(b.GetPath(), fsGroup)
 }
 
-func (b *rbdBuilder) SetUpAt(dir string) error {
+func (b *rbdBuilder) SetUpAt(dir string, fsGroup *int64) error {
 	// diskSetUp checks mountpoints and prevent repeated calls
-	err := diskSetUp(b.manager, *b, dir, b.mounter)
+	err := diskSetUp(b.manager, *b, dir, b.mounter, fsGroup)
 	if err != nil {
 		glog.Errorf("rbd: failed to setup")
 	}
@@ -214,14 +220,6 @@ type rbdCleaner struct {
 }
 
 var _ volume.Cleaner = &rbdCleaner{}
-
-func (b *rbd) IsReadOnly() bool {
-	return b.ReadOnly
-}
-
-func (b *rbd) SupportsSELinux() bool {
-	return true
-}
 
 // Unmounts the bind mount, and detaches the disk only if the disk
 // resource was the last reference to that disk on the kubelet.

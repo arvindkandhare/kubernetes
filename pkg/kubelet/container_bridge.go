@@ -59,7 +59,7 @@ func createCBR0(wantCIDR *net.IPNet) error {
 	return nil
 }
 
-func ensureCbr0(wantCIDR *net.IPNet) error {
+func ensureCbr0(wantCIDR *net.IPNet, promiscuous bool) error {
 	exists, err := cbr0Exists()
 	if err != nil {
 		return err
@@ -80,7 +80,20 @@ func ensureCbr0(wantCIDR *net.IPNet) error {
 			glog.Error(err)
 			return err
 		}
-		return createCBR0(wantCIDR)
+		if err := createCBR0(wantCIDR); err != nil {
+			glog.Error(err)
+			return err
+		}
+	}
+	// Put the container bridge into promiscuous mode to force it to accept hairpin packets.
+	// TODO: Remove this once the kernel bug (#20096) is fixed.
+	if promiscuous {
+		// Checking if the bridge is in promiscuous mode is as expensive and more brittle than
+		// simply setting the flag everytime.
+		if err := exec.Command("ip", "link", "set", "cbr0", "promisc", "on").Run(); err != nil {
+			glog.Error(err)
+			return err
+		}
 	}
 	return nil
 }
@@ -119,23 +132,24 @@ func cbr0CidrCorrect(wantCIDR *net.IPNet) bool {
 }
 
 // TODO(dawnchen): Using pkg/util/iptables
-func ensureIPTablesMasqRule() error {
+// nonMasqueradeCIDR is the CIDR for our internal IP range; traffic to IPs outside this range will use IP masquerade.
+func ensureIPTablesMasqRule(nonMasqueradeCIDR string) error {
 	// Check if the MASQUERADE rule exist or not
 	if err := exec.Command("iptables",
 		"-t", "nat",
 		"-C", "POSTROUTING",
-		"!", "-d", "10.0.0.0/8",
+		"!", "-d", nonMasqueradeCIDR,
 		"-m", "addrtype", "!", "--dst-type", "LOCAL",
 		"-j", "MASQUERADE").Run(); err == nil {
 		// The MASQUERADE rule exists
 		return nil
 	}
 
-	glog.Infof("MASQUERADE rule doesn't exist, recreate it")
+	glog.Infof("MASQUERADE rule doesn't exist, recreate it (with nonMasqueradeCIDR %s)", nonMasqueradeCIDR)
 	if err := exec.Command("iptables",
 		"-t", "nat",
 		"-A", "POSTROUTING",
-		"!", "-d", "10.0.0.0/8",
+		"!", "-d", nonMasqueradeCIDR,
 		"-m", "addrtype", "!", "--dst-type", "LOCAL",
 		"-j", "MASQUERADE").Run(); err != nil {
 		return err

@@ -23,6 +23,10 @@ existing replication controller and overwrite at least one (common) label in its
 
 .SH OPTIONS
 .PP
+\fB\-\-container\fP=""
+    Container name which will have its image upgraded. Only relevant when \-\-image is specified, ignored otherwise. Required when using \-\-image on a multi\-container pod
+
+.PP
 \fB\-\-deployment\-label\-key\fP="deployment"
     The key to use to differentiate between two different controllers, default 'deployment'.  Only relevant when \-\-image is specified, ignored otherwise
 
@@ -69,8 +73,12 @@ existing replication controller and overwrite at least one (common) label in its
     When printing, show all resources (default hide terminated pods.)
 
 .PP
+\fB\-\-show\-labels\fP=false
+    When printing, show all labels as the last column (default hide labels column)
+
+.PP
 \fB\-\-sort\-by\fP=""
-    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. 'ObjectMeta.Name'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
+    If non\-empty, sort list types using this field specification.  The field specification is expressed as a JSONPath expression (e.g. '{.metadata.name}'). The field in the API resource specified by this JSONPath expression must be an integer or a string.
 
 .PP
 \fB\-\-template\fP=""
@@ -105,7 +113,7 @@ existing replication controller and overwrite at least one (common) label in its
 
 .PP
 \fB\-\-client\-certificate\fP=""
-    Path to a client key file for TLS.
+    Path to a client certificate file for TLS.
 
 .PP
 \fB\-\-client\-key\fP=""

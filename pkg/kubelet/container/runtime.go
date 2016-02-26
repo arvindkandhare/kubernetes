@@ -17,11 +17,11 @@ limitations under the License.
 package container
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/golang/glog"
 	"k8s.io/kubernetes/pkg/api"
@@ -29,28 +29,6 @@ import (
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/volume"
 )
-
-// Container Terminated and Kubelet is backing off the restart
-var ErrCrashLoopBackOff = errors.New("CrashLoopBackOff")
-
-var (
-	// Container image pull failed, kubelet is backing off image pull
-	ErrImagePullBackOff = errors.New("ImagePullBackOff")
-
-	// Unable to inspect image
-	ErrImageInspect = errors.New("ImageInspectError")
-
-	// General image pull error
-	ErrImagePull = errors.New("ErrImagePull")
-
-	// Required Image is absent on host and PullPolicy is NeverPullImage
-	ErrImageNeverPull = errors.New("ErrImageNeverPull")
-
-	// Get http error when pulling image from registry
-	RegistryUnavailable = errors.New("RegistryUnavailable")
-)
-
-var ErrRunContainer = errors.New("RunContainerError")
 
 type Version interface {
 	// Compare compares two versions of the runtime. On success it returns -1
@@ -77,6 +55,9 @@ type Runtime interface {
 
 	// Version returns the version information of the container runtime.
 	Version() (Version, error)
+	// APIVersion returns the API version information of the container
+	// runtime. This may be different from the runtime engine's version.
+	APIVersion() (Version, error)
 	// GetPods returns a list containers group by pods. The boolean parameter
 	// specifies whether the runtime returns all containers including those already
 	// exited and dead containers (used for garbage collection).
@@ -84,13 +65,13 @@ type Runtime interface {
 	// GarbageCollect removes dead containers using the specified container gc policy
 	GarbageCollect(gcPolicy ContainerGCPolicy) error
 	// Syncs the running pod into the desired pod.
-	SyncPod(pod *api.Pod, runningPod Pod, podStatus api.PodStatus, pullSecrets []api.Secret, backOff *util.Backoff) error
+	SyncPod(pod *api.Pod, apiPodStatus api.PodStatus, podStatus *PodStatus, pullSecrets []api.Secret, backOff *util.Backoff) PodSyncResult
 	// KillPod kills all the containers of a pod. Pod may be nil, running pod must not be.
+	// TODO(random-liu): Return PodSyncResult in KillPod.
 	KillPod(pod *api.Pod, runningPod Pod) error
-	// GetPodStatus retrieves the status of the pod, including the information of
-	// all containers in the pod. Clients of this interface assume the containers
-	// statuses in a pod always have a deterministic ordering (eg: sorted by name).
-	GetPodStatus(*api.Pod) (*api.PodStatus, error)
+	// GetPodStatus retrieves the status of the pod, including the
+	// information of all containers in the pod that are visble in Runtime.
+	GetPodStatus(uid types.UID, name, namespace string) (*PodStatus, error)
 	// PullImage pulls an image from the network to local storage using the supplied
 	// secrets if necessary.
 	PullImage(image ImageSpec, pullSecrets []api.Secret) error
@@ -136,7 +117,7 @@ type ImagePuller interface {
 	PullImage(pod *api.Pod, container *api.Container, pullSecrets []api.Secret) (error, string)
 }
 
-// Pod is a group of containers, with the status of the pod.
+// Pod is a group of containers.
 type Pod struct {
 	// The ID of the pod, which can be used to retrieve a particular pod
 	// from the pod list returned by GetPods().
@@ -147,6 +128,14 @@ type Pod struct {
 	// List of containers that belongs to this pod. It may contain only
 	// running containers, or mixed with dead ones (when GetPods(true)).
 	Containers []*Container
+}
+
+// PodPair contains both runtime#Pod and api#Pod
+type PodPair struct {
+	// APIPod is the api.Pod
+	APIPod *api.Pod
+	// RunningPod is the pod defined defined in pkg/kubelet/container/runtime#Pod
+	RunningPod *Pod
 }
 
 // ContainerID is a type that identifies a container.
@@ -198,8 +187,27 @@ func (c *ContainerID) UnmarshalJSON(data []byte) error {
 	return c.ParseString(string(data))
 }
 
+// DockerID is an ID of docker container. It is a type to make it clear when we're working with docker container Ids
+type DockerID string
+
+func (id DockerID) ContainerID() ContainerID {
+	return ContainerID{
+		Type: "docker",
+		ID:   string(id),
+	}
+}
+
+type ContainerState string
+
+const (
+	ContainerStateRunning ContainerState = "running"
+	ContainerStateExited  ContainerState = "exited"
+	// This unknown encompasses all the states that we currently don't care.
+	ContainerStateUnknown ContainerState = "unknown"
+)
+
 // Container provides the runtime information for a container, such as ID, hash,
-// status of the container.
+// state of the container.
 type Container struct {
 	// The ID of the container, used by the container runtime to identify
 	// a container.
@@ -215,6 +223,76 @@ type Container struct {
 	// The timestamp of the creation time of the container.
 	// TODO(yifan): Consider to move it to api.ContainerStatus.
 	Created int64
+	// State is the state of the container.
+	State ContainerState
+}
+
+// PodStatus represents the status of the pod and its containers.
+// api.PodStatus can be derived from examining PodStatus and api.Pod.
+type PodStatus struct {
+	// ID of the pod.
+	ID types.UID
+	// Name of the pod.
+	Name string
+	// Namspace of the pod.
+	Namespace string
+	// IP of the pod.
+	IP string
+	// Status of containers in the pod.
+	ContainerStatuses []*ContainerStatus
+}
+
+// ContainerStatus represents the status of a container.
+type ContainerStatus struct {
+	// ID of the container.
+	ID ContainerID
+	// Name of the container.
+	Name string
+	// Status of the container.
+	State ContainerState
+	// Creation time of the container.
+	CreatedAt time.Time
+	// Start time of the container.
+	StartedAt time.Time
+	// Finish time of the container.
+	FinishedAt time.Time
+	// Exit code of the container.
+	ExitCode int
+	// Name of the image.
+	Image string
+	// ID of the image.
+	ImageID string
+	// Hash of the container, used for comparison.
+	Hash uint64
+	// Number of times that the container has been restarted.
+	RestartCount int
+	// A string explains why container is in such a status.
+	Reason string
+	// Message written by the container before exiting (stored in
+	// TerminationMessagePath).
+	Message string
+}
+
+// FindContainerStatusByName returns container status in the pod status with the given name.
+// When there are multiple containers' statuses with the same name, the first match will be returned.
+func (podStatus *PodStatus) FindContainerStatusByName(containerName string) *ContainerStatus {
+	for _, containerStatus := range podStatus.ContainerStatuses {
+		if containerStatus.Name == containerName {
+			return containerStatus
+		}
+	}
+	return nil
+}
+
+// Get container status of all the running containers in a pod
+func (podStatus *PodStatus) GetRunningContainerStatuses() []*ContainerStatus {
+	runnningContainerStatues := []*ContainerStatus{}
+	for _, containerStatus := range podStatus.ContainerStatuses {
+		if containerStatus.State == ContainerStateRunning {
+			runnningContainerStatues = append(runnningContainerStatues, containerStatus)
+		}
+	}
+	return runnningContainerStatues
 }
 
 // Basic information about a container image.
@@ -222,7 +300,7 @@ type Image struct {
 	// ID of the image.
 	ID string
 	// Other names by which this image is known.
-	Tags []string
+	RepoTags []string
 	// The size of the image in bytes.
 	Size int64
 }
@@ -276,6 +354,8 @@ type RunContainerOptions struct {
 	DNSSearch []string
 	// The parent cgroup to pass to Docker
 	CgroupParent string
+	// The type of container rootfs
+	ReadOnly bool
 }
 
 // VolumeInfo contains information about the volume.
@@ -335,6 +415,15 @@ func (p *Pod) FindContainerByName(containerName string) *Container {
 	return nil
 }
 
+func (p *Pod) FindContainerByID(id ContainerID) *Container {
+	for _, c := range p.Containers {
+		if c.ID == id {
+			return c
+		}
+	}
+	return nil
+}
+
 // ToAPIPod converts Pod to api.Pod. Note that if a field in api.Pod has no
 // corresponding field in Pod, the field would not be populated.
 func (p *Pod) ToAPIPod() *api.Pod {
@@ -377,3 +466,7 @@ func ParsePodFullName(podFullName string) (string, string, error) {
 	}
 	return parts[0], parts[1], nil
 }
+
+// Option is a functional option type for Runtime, useful for
+// completely optional settings.
+type Option func(Runtime)

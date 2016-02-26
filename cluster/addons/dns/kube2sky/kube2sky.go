@@ -21,7 +21,6 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"hash/fnv"
 	"net/http"
@@ -34,24 +33,25 @@ import (
 	etcd "github.com/coreos/go-etcd/etcd"
 	"github.com/golang/glog"
 	skymsg "github.com/skynetservices/skydns/msg"
+	flag "github.com/spf13/pflag"
 	kapi "k8s.io/kubernetes/pkg/api"
+	"k8s.io/kubernetes/pkg/api/unversioned"
 	kcache "k8s.io/kubernetes/pkg/client/cache"
 	kclient "k8s.io/kubernetes/pkg/client/unversioned"
 	kclientcmd "k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
 	kframework "k8s.io/kubernetes/pkg/controller/framework"
 	kselector "k8s.io/kubernetes/pkg/fields"
-	etcdstorage "k8s.io/kubernetes/pkg/storage/etcd"
+	etcdutil "k8s.io/kubernetes/pkg/storage/etcd/util"
 	"k8s.io/kubernetes/pkg/util"
 	"k8s.io/kubernetes/pkg/util/wait"
 )
 
 var (
-	// TODO: switch to pflag and make - and _ equivalent.
 	argDomain              = flag.String("domain", "cluster.local", "domain under which to create names")
-	argEtcdMutationTimeout = flag.Duration("etcd_mutation_timeout", 10*time.Second, "crash after retrying etcd mutation for a specified duration")
+	argEtcdMutationTimeout = flag.Duration("etcd-mutation-timeout", 10*time.Second, "crash after retrying etcd mutation for a specified duration")
 	argEtcdServer          = flag.String("etcd-server", "http://127.0.0.1:4001", "URL to etcd server")
-	argKubecfgFile         = flag.String("kubecfg_file", "", "Location of kubecfg file for access to kubernetes master service; --kube_master_url overrides the URL part of this; if neither this nor --kube_master_url are provided, defaults to service account tokens")
-	argKubeMasterURL       = flag.String("kube_master_url", "", "URL to reach kubernetes master. Env variables in this flag will be expanded.")
+	argKubecfgFile         = flag.String("kubecfg-file", "", "Location of kubecfg file for access to kubernetes master service; --kube-master-url overrides the URL part of this; if neither this nor --kube-master-url are provided, defaults to service account tokens")
+	argKubeMasterURL       = flag.String("kube-master-url", "", "URL to reach kubernetes master. Env variables in this flag will be expanded.")
 )
 
 const (
@@ -85,8 +85,10 @@ type kube2sky struct {
 	etcdMutationTimeout time.Duration
 	// A cache that contains all the endpoints in the system.
 	endpointsStore kcache.Store
-	// A cache that contains all the servicess in the system.
+	// A cache that contains all the services in the system.
 	servicesStore kcache.Store
+	// A cache that contains all the pods in the system.
+	podsStore kcache.Store
 	// Lock for controlling access to headless services.
 	mlock sync.Mutex
 }
@@ -335,18 +337,18 @@ func (ks *kube2sky) generateSRVRecord(subdomain, portSegment, recordName, cName 
 }
 
 func (ks *kube2sky) addDNS(subdomain string, service *kapi.Service) error {
-	if len(service.Spec.Ports) == 0 {
-		glog.Fatalf("Unexpected service with no ports: %v", service)
-	}
 	// if ClusterIP is not set, a DNS entry should not be created
 	if !kapi.IsServiceIPSet(service) {
 		return ks.newHeadlessService(subdomain, service)
+	}
+	if len(service.Spec.Ports) == 0 {
+		glog.Info("Unexpected service with no ports, this should not have happend: %v", service)
 	}
 	return ks.generateRecordsForPortalService(subdomain, service)
 }
 
 // Implements retry logic for arbitrary mutator. Crashes after retrying for
-// etcd_mutation_timeout.
+// etcd-mutation-timeout.
 func (ks *kube2sky) mutateEtcdOrDie(mutator func() error) {
 	timeout := time.After(ks.etcdMutationTimeout)
 	for {
@@ -418,7 +420,7 @@ func newEtcdClient(etcdServer string) (*etcd.Client, error) {
 		err    error
 	)
 	for attempt := 1; attempt <= maxConnectAttempts; attempt++ {
-		if _, err = etcdstorage.GetEtcdVersion(etcdServer); err == nil {
+		if _, err = etcdutil.GetEtcdVersion(etcdServer); err == nil {
 			break
 		}
 		if attempt == maxConnectAttempts {
@@ -453,10 +455,10 @@ func newEtcdClient(etcdServer string) (*etcd.Client, error) {
 func expandKubeMasterURL() (string, error) {
 	parsedURL, err := url.Parse(os.ExpandEnv(*argKubeMasterURL))
 	if err != nil {
-		return "", fmt.Errorf("failed to parse --kube_master_url %s - %v", *argKubeMasterURL, err)
+		return "", fmt.Errorf("failed to parse --kube-master-url %s - %v", *argKubeMasterURL, err)
 	}
 	if parsedURL.Scheme == "" || parsedURL.Host == "" || parsedURL.Host == ":" {
-		return "", fmt.Errorf("invalid --kube_master_url specified %s", *argKubeMasterURL)
+		return "", fmt.Errorf("invalid --kube-master-url specified %s", *argKubeMasterURL)
 	}
 	return parsedURL.String(), nil
 }
@@ -468,7 +470,7 @@ func newKubeClient() (*kclient.Client, error) {
 		err       error
 		masterURL string
 	)
-	// If the user specified --kube_master_url, expand env vars and verify it.
+	// If the user specified --kube-master-url, expand env vars and verify it.
 	if *argKubeMasterURL != "" {
 		masterURL, err = expandKubeMasterURL()
 		if err != nil {
@@ -477,15 +479,15 @@ func newKubeClient() (*kclient.Client, error) {
 	}
 
 	if masterURL != "" && *argKubecfgFile == "" {
-		// Only --kube_master_url was provided.
+		// Only --kube-master-url was provided.
 		config = &kclient.Config{
-			Host:    masterURL,
-			Version: "v1",
+			Host:          masterURL,
+			ContentConfig: kclient.ContentConfig{GroupVersion: &unversioned.GroupVersion{Version: "v1"}},
 		}
 	} else {
 		// We either have:
-		//  1) --kube_master_url and --kubecfg_file
-		//  2) just --kubecfg_file
+		//  1) --kube-master-url and --kubecfg-file
+		//  2) just --kubecfg-file
 		//  3) neither flag
 		// In any case, the logic is the same.  If (3), this will automatically
 		// fall back on the service account token.
@@ -498,7 +500,7 @@ func newKubeClient() (*kclient.Client, error) {
 	}
 
 	glog.Infof("Using %s for kubernetes master", config.Host)
-	glog.Infof("Using kubernetes API %s", config.Version)
+	glog.Infof("Using kubernetes API %v", config.GroupVersion)
 	return kclient.New(config)
 }
 
@@ -513,7 +515,7 @@ func watchForServices(kubeClient *kclient.Client, ks *kube2sky) kcache.Store {
 			UpdateFunc: ks.updateService,
 		},
 	)
-	go serviceController.Run(util.NeverStop)
+	go serviceController.Run(wait.NeverStop)
 	return serviceStore
 }
 
@@ -531,7 +533,7 @@ func watchEndpoints(kubeClient *kclient.Client, ks *kube2sky) kcache.Store {
 		},
 	)
 
-	go eController.Run(util.NeverStop)
+	go eController.Run(wait.NeverStop)
 	return eStore
 }
 
@@ -549,7 +551,7 @@ func watchPods(kubeClient *kclient.Client, ks *kube2sky) kcache.Store {
 		},
 	)
 
-	go eController.Run(util.NeverStop)
+	go eController.Run(wait.NeverStop)
 	return eStore
 }
 
@@ -560,6 +562,7 @@ func getHash(text string) string {
 }
 
 func main() {
+	flag.CommandLine.SetNormalizeFunc(util.WarnWordSepNormalizeFunc)
 	flag.Parse()
 	var err error
 	// TODO: Validate input flags.
@@ -582,7 +585,7 @@ func main() {
 
 	ks.endpointsStore = watchEndpoints(kubeClient, &ks)
 	ks.servicesStore = watchForServices(kubeClient, &ks)
-	ks.servicesStore = watchPods(kubeClient, &ks)
+	ks.podsStore = watchPods(kubeClient, &ks)
 
 	select {}
 }

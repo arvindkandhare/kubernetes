@@ -18,6 +18,7 @@
 If you are using a released version of Kubernetes, you should
 refer to the docs that go with that version.
 
+<!-- TAG RELEASE_LINK, added by the munger automatically -->
 <strong>
 The latest release of this document can be found
 [here](http://releases.k8s.io/release-1.1/docs/user-guide/pod-states.md).
@@ -84,7 +85,7 @@ Three types of controllers are currently available:
 
 - Use a [`Job`](jobs.md) for pods which are expected to terminate (e.g. batch computations).
 - Use a [`ReplicationController`](replication-controller.md) for pods which are not expected to
-  terminate, and where (e.g. web servers).
+  terminate (e.g. web servers).
 - Use a [`DaemonSet`](../admin/daemons.md): Use for pods which need to run 1 per machine because they provide a
   machine-specific system service.
 If you are unsure whether to use ReplicationController or Daemon, then see [Daemon Set versus
