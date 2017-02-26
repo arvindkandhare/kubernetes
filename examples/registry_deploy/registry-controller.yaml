@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: registry
+  labels:
+    name: registry
+spec:
+  replicas: 1
+  selector:
+    name: registry
+  template:
+    metadata:
+      labels:
+        name: registry
+    spec:
+      containers:
+        - name: registry
+          image: arvindkandhare/registry:latest
+          volumeMounts:
+            - mountPath: "/host"
+              name: host
+
+          env:   
+             - name: SETTINGS_FLAVOR
+               value: s3
+
+             - name:   AWS_ACCESS_KEY
+               value:  emccode
+
+             - name:   AWS_SECRET_KEY
+               value:  "YNXscanl4wxbKx6n5wUWNoUk+dscIam+mkbUMM2v"
+
+             - name:   AWS_BUCKET
+               value:  "custom"
+
+             - name:   S3_ENCRYPT
+               value:  "false"
+
+             - name:   S3_SECURE
+               value:  "false"
+
+             - name:   AWS_REGION
+               value:  "Custom"
+
+             - name:   BUCKET_ENDPOINT
+               value:  "http://104.197.191.38:9020/"
+
+             - name:   REGISTRY_HTTP_TLS_CERTIFICATE
+               value:  "/host/certs/domain.crt" 
+
+             - name:    REGISTRY_HTTP_TLS_KEY
+               value:  "/host/certs/domain.key"
+
+          ports:
+#          - containerPort: 5000
+
+# -e AWS_ACCESS_KEY=emccode -e S3_ENCRYPT=false -e S3_SECURE=false -e AWS_BUCKET=custom -e AWS_REGION=Custom  -e BUCKET_ENDPOINT=http://104.197.82.195:9020/ -e AWS_SECRET_KEY=sbBXm8HqlZGjH9Kl3gQtjSCmdksgh37bI9jX0MTy 
+      volumes:
+          - name: host 
+            hostPath:
+               path: "/host"
+#
+#          - name: log 
+#            hostPath:
+#               path: "/var/log/vipr/emcvipr-object"
+#  
+#          - name: data 
+#            hostPath:
+#                path: "/data"
+#
+#
+#          - name: vagrant 
+#            hostPath:
+#                path: "/vagrant"
+#    
+#          - name: dae
+#            hostPath:
+#                path: "/ecs"
+#
+#          - name: dbus
+#            hostPath:
+##                path: "/var/run/dbus"

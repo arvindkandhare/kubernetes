@@ -1,0 +1,37 @@
+<suite name="Nfs-Sanity">
+    <parameter name="config" value="./conf/filesvc-test-config.properties"/>
+    <parameter name="log4j" value="./conf/filesvc-test-log4j.properties"/>
+   
+<!--     <test name="functional">
+         <classes>
+             <class name="com.emc.storageos.nfs.sanity.LoadConfig"/>
+	     <class name="com.emc.storageos.nfs.sanity.TestBFS"/>
+             <class name="com.emc.storageos.nfs.sanity.TestLock"/>
+             <class name="com.emc.storageos.nfs.sanity.TestBVT"/>
+         </classes>
+     </test>
+-->
+    <test name="Verbs">
+        <classes>
+            <class name="com.emc.storageos.nfs.sanity.LoadConfig"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsCreate"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsGetAttr"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsWrite"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsRemove"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsRead"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsMkDir"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsRename"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsRmDir"/>
+            <class name="com.emc.storageos.nfs.sanity.NfsLookUp"/>
+
+        </classes>
+    </test>
+
+    <!--
+   <test name="TestAll">
+       <packages>
+           <package name="com.emc.storageos.nfs.sanity.*"/>
+       </packages>
+   </test>
+       -->
+</suite>

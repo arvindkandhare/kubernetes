@@ -18,6 +18,9 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+
+
+
 # Set the host name explicitly
 # See: https://github.com/mitchellh/vagrant/issues/2430
 hostnamectl set-hostname ${MASTER_NAME}

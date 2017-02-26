@@ -1,0 +1,385 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: mosaicmeweb
+  labels:
+    name: mosaicmeweb
+spec:
+  replicas: 1
+  selector:
+    name: mosaicmeweb
+  template:
+    metadata:
+      labels:
+        name: mosaicmeweb
+    spec:
+      containers:
+        - name: mosaicmeweb
+          image: arvindkandhare/masaicme_web
+          env:
+              - name:   TWITTER_CONSUMER_KEY
+                value:  twitter_consumer_key
+
+              - name:  TWITTER_CONSUMER_SECRET
+                value: twitter_consumer_secret
+
+              - name:  TWITTER_ACCESS_TOKEN
+                value: twitter_access_token
+
+              - name:  TWITTER_ACCESS_TOKEN_SECRET
+                value: twitter_access_token_secret
+
+              - name:  TWITTER_USERNAME
+                value: sweet_kandy
+
+              - name:  S3_ACCESS_KEY
+                value: emccode
+          
+              - name:  S3_SECRET_KEY
+                value: T1YlozuIfvA+FVg6t8XGZwK2evwnJgtt9ytTnooO
+          
+              - name:  S3_HOST
+                value: 130.211.172.213
+          
+              - name: S3_PORT
+                value: "9020"
+          
+              - name:  S3_HTTPS
+                value: "false"
+          
+              - name: BUCKET_COLLECTOR
+                value: emcworld
+              
+              - name: BUCKET_IN
+                value: mosaic-in
+          
+              - name: BUCKET_OUT_LARGE
+                value: mosaic-outlarge
+          
+              - name: BUCKET_OUT_SMALL
+                value: mosaic-outsmall
+          
+              - name: RABBITMQ_HOST
+                value: localhost
+              
+              - name: RABBITMQ_PORT
+                value: "5672"
+          
+              - name: RABBITMQ_USER
+                value: guest
+          
+              - name: RABBITMQ_PASSWORD
+                value: guest
+          
+              - name: REDIS_HOST
+                value: localhost
+              
+              - name: REDIS_PORT
+                value: "6379"
+          
+              - name: REDIS_DB
+                value: "0"
+          
+              - name: QUEUE_IN
+                value: mosaic-in
+          
+              - name: QUEUE_ENGINE
+                value: mosaic-eng
+          
+              - name: QUEUE_FINISH
+                value: mosaic-finish
+          
+              - name: QUEUE_DONE
+                value: mosaic-done
+          #securityContext:
+           #   Privileged: true
+
+          ports:
+#          - containerPort: 5000
+
+          volumeMounts:
+            - mountPath: "/host"
+              name: host
+            - mountPath: "/data"
+              name: data
+            - mountPath: "/var/lib/docker"
+              name: docker
+
+        - name:    celeryworkers
+          image:   emccode/mosaicme-collector
+          args:    ["celery", "-A", "tasks", "worker", "--loglevel=info"]
+          env:
+              - name:   TWITTER_CONSUMER_KEY
+                value:  twitter_consumer_key
+
+              - name:  TWITTER_CONSUMER_SECRET
+                value: twitter_consumer_secret
+
+              - name:  TWITTER_ACCESS_TOKEN
+                value: twitter_access_token
+
+              - name:  TWITTER_ACCESS_TOKEN_SECRET
+                value: twitter_access_token_secret
+
+              - name:  TWITTER_USERNAME
+                value: sweet_kandy
+
+              - name:  S3_ACCESS_KEY
+                value: emccode
+          
+              - name:  S3_SECRET_KEY
+                value: T1YlozuIfvA+FVg6t8XGZwK2evwnJgtt9ytTnooO
+          
+              - name:  S3_HOST
+                value: 130.211.172.213
+          
+              - name: S3_PORT
+                value: "9020"
+          
+              - name:  S3_HTTPS
+                value: "false"
+          
+              - name: BUCKET_COLLECTOR
+                value: emcworld
+              
+              - name: BUCKET_IN
+                value: mosaic-in
+          
+              - name: BUCKET_OUT_LARGE
+                value: mosaic-outlarge
+          
+              - name: BUCKET_OUT_SMALL
+                value: mosaic-outsmall
+          
+              - name: RABBITMQ_HOST
+                value: localhost
+              
+              - name: RABBITMQ_PORT
+                value: "5672"
+          
+              - name: RABBITMQ_USER
+                value: guest
+          
+              - name: RABBITMQ_PASSWORD
+                value: guest
+          
+              - name: REDIS_HOST
+                value: localhost
+              
+              - name: REDIS_PORT
+                value: "6379"
+          
+              - name: REDIS_DB
+                value: "0"
+          
+              - name: QUEUE_IN
+                value: mosaic-in
+          
+              - name: QUEUE_ENGINE
+                value: mosaic-eng
+          
+              - name: QUEUE_FINISH
+                value: mosaic-finish
+          
+              - name: QUEUE_DONE
+                value: mosaic-done
+
+        - name:    collector
+          image:   emccode/mosaicme-collector
+          env:
+                 - name:   MOSAICME_LISTEN_HASHTAG
+                   value:  mosaicme
+
+                 - name:   MOSAIC_BUCKET
+                   value:  mosaic_in
+
+                 - name:   MOSAIC_QUEUE
+                   value:  mosaic_in
+                 - name:   TWITTER_CONSUMER_KEY
+                   value:  twitter_consumer_key
+    
+                 - name:  TWITTER_CONSUMER_SECRET
+                   value: twitter_consumer_secret
+    
+                 - name:  TWITTER_ACCESS_TOKEN
+                   value: twitter_access_token
+    
+                 - name:  TWITTER_ACCESS_TOKEN_SECRET
+                   value: twitter_access_token_secret
+    
+                 - name:  TWITTER_USERNAME
+                   value: sweet_kandy
+    
+                 - name:  S3_ACCESS_KEY
+                   value: emccode
+              
+                 - name:  S3_SECRET_KEY
+                   value: T1YlozuIfvA+FVg6t8XGZwK2evwnJgtt9ytTnooO
+              
+                 - name:  S3_HOST
+                   value: 130.211.172.213
+              
+                 - name: S3_PORT
+                   value: "9020"
+              
+                 - name:  S3_HTTPS
+                   value: "false"
+              
+                 - name: BUCKET_COLLECTOR
+                   value: emcworld
+                  
+                 - name: BUCKET_IN
+                   value: mosaic-in
+              
+                 - name: BUCKET_OUT_LARGE
+                   value: mosaic-outlarge
+              
+                 - name: BUCKET_OUT_SMALL
+                   value: mosaic-outsmall
+              
+                 - name: RABBITMQ_HOST
+                   value: localhost
+                  
+                 - name: RABBITMQ_PORT
+                   value: "5672"
+              
+                 - name: RABBITMQ_USER
+                   value: guest
+              
+                 - name: RABBITMQ_PASSWORD
+                   value: guest
+              
+                 - name: REDIS_HOST
+                   value: localhost
+                  
+                 - name: REDIS_PORT
+                   value: "6379"
+              
+                 - name: REDIS_DB
+                   value: "0"
+              
+                 - name: QUEUE_IN
+                   value: mosaic-in
+              
+                 - name: QUEUE_ENGINE
+                   value: mosaic-eng
+              
+                 - name: QUEUE_FINISH
+                   value: mosaic-finish
+              
+                 - name: QUEUE_DONE
+                   value: mosaic-done
+
+
+        - name:    rabbit
+          image:   rabbitmq
+          env:
+                 - name:   RABBITMQ_NODENAME
+                   value:  localhost
+
+        - name:    mosaicmecacher1
+          image:   emccode/mosaicme-cacher
+          env:
+              - name:   TWITTER_CONSUMER_KEY
+                value:  twitter_consumer_key
+
+              - name:  TWITTER_CONSUMER_SECRET
+                value: twitter_consumer_secret
+
+              - name:  TWITTER_ACCESS_TOKEN
+                value: twitter_access_token
+
+              - name:  TWITTER_ACCESS_TOKEN_SECRET
+                value: twitter_access_token_secret
+
+              - name:  TWITTER_USERNAME
+                value: sweet_kandy
+
+              - name:  S3_ACCESS_KEY
+                value: emccode
+          
+              - name:  S3_SECRET_KEY
+                value: T1YlozuIfvA+FVg6t8XGZwK2evwnJgtt9ytTnooO
+          
+              - name:  S3_HOST
+                value: 130.211.172.213
+          
+              - name: S3_PORT
+                value: "9020"
+          
+              - name:  S3_HTTPS
+                value: "false"
+          
+              - name: BUCKET_COLLECTOR
+                value: emcworld
+              
+              - name: BUCKET_IN
+                value: mosaic-in
+          
+              - name: BUCKET_OUT_LARGE
+                value: mosaic-outlarge
+          
+              - name: BUCKET_OUT_SMALL
+                value: mosaic-outsmall
+          
+              - name: RABBITMQ_HOST
+                value: localhost
+              
+              - name: RABBITMQ_PORT
+                value: "5672"
+          
+              - name: RABBITMQ_USER
+                value: guest
+          
+              - name: RABBITMQ_PASSWORD
+                value: guest
+          
+              - name: REDIS_HOST
+                value: localhost
+              
+              - name: REDIS_PORT
+                value: "6379"
+          
+              - name: REDIS_DB
+                value: "0"
+          
+              - name: QUEUE_IN
+                value: mosaic-in
+          
+              - name: QUEUE_ENGINE
+                value: mosaic-eng
+          
+              - name: QUEUE_FINISH
+                value: mosaic-finish
+          
+              - name: QUEUE_DONE
+                value: mosaic-done
+
+        - name:    redis
+          image:   redis
+
+      volumes:
+          - name: host 
+            hostPath:
+               path: "/host"
+
+          - name: docker 
+            hostPath:
+               path: "/var/lib/docker"
+  
+          - name: data 
+            hostPath:
+                path: "/data"
+
+#
+#          - name: vagrant 
+#            hostPath:
+#                path: "/vagrant"
+#    
+#          - name: dae
+#            hostPath:
+#                path: "/ecs"
+#
+#          - name: dbus
+#            hostPath:
+##                path: "/var/run/dbus"

@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-service
+  labels:
+    name: registry-service
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 5000
+    name: first
+
+  - port: 443
+    name: second
+
+  - port: 80
+    name: third
+
+  - port: 2376
+    name: forth 
+
+  type: LoadBalancer
+  selector:
+    name: registry-service

@@ -1,0 +1,4 @@
++++ Staging server tars to Google Storage: gs://kubernetes-staging-94c472bb0c/devel
++++ kubernetes-server-linux-amd64.tar.gz already staged ('rm /Users/kandha/Documents/go/src/github.com/GoogleCloudPlatform/kubernetes/cluster/../cluster/../cluster/gce/../../cluster/../_output/release-tars/kubernetes-server-linux-amd64.tar.gz.sha1' to force)
++++ kubernetes-salt.tar.gz already staged ('rm /Users/kandha/Documents/go/src/github.com/GoogleCloudPlatform/kubernetes/cluster/../cluster/../cluster/gce/../../cluster/../_output/release-tars/kubernetes-salt.tar.gz.sha1' to force)
+Starting master and configuring firewalls

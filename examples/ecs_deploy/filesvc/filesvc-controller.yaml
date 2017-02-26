@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: filesvc
+  labels:
+    name: filesvc
+spec:
+  replicas: 1
+  selector:
+    name: filesvc
+  template:
+    metadata:
+      labels:
+        name: filesvc
+    spec:
+      containers:
+        - name: filesvc
+          image: arvindkandhare/filesvc:latest
+          securityContext:
+              Privileged: true
+
+          env:   
+             - name:   AWS_BUCKET
+               value:  "test"
+
+             - name:   BUCKET_ENDPOINT
+               value:  "http://130.211.186.233:9020/"
+
+          ports:
+#          - containerPort: 5000
+
+          volumeMounts:
+            - mountPath: "/host"
+              name: host
+            - mountPath: "/data"
+              name: data
+            - mountPath: "/var/lib/docker"
+              name: docker
+
+      volumes:
+          - name: host 
+            hostPath:
+               path: "/host"
+
+          - name: docker 
+            hostPath:
+               path: "/var/lib/docker"
+  
+          - name: data 
+            hostPath:
+                path: "/data"
+
+#
+#          - name: vagrant 
+#            hostPath:
+#                path: "/vagrant"
+#    
+#          - name: dae
+#            hostPath:
+#                path: "/ecs"
+#
+#          - name: dbus
+#            hostPath:
+##                path: "/var/run/dbus"

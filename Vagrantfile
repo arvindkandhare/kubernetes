@@ -168,6 +168,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       end
       config.vm.synced_folder ".", "/vagrant", opts
     end
+#    config.vm.synced_folder "../docker", "/var/lib/docker/"
 
     # Try VMWare Fusion first (see
     # https://docs.vagrantup.com/v2/providers/basic_usage.html)

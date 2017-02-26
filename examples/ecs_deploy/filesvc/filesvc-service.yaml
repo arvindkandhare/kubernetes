@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: filesvc-service
+  labels:
+    name: filesvc-service
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 80
+    name: first
+
+  - port: 22
+    name: second
+
+  - port: 64443
+    name: third
+
+  - port: 8080
+    name: forth
+
+  - port: 8000
+    name: fifth
+
+  - port: 4443
+    name: sixth
+ 
+  - port: 9020
+    name: seventh
+
+  - port: 9021
+    name: eighth
+
+  type: LoadBalancer
+  selector:
+    name: filesvc
