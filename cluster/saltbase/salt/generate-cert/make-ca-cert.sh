@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,7 +39,21 @@ if [ "$cert_ip" == "_use_gce_external_ip_" ]; then
 fi
 
 if [ "$cert_ip" == "_use_aws_external_ip_" ]; then
-  cert_ip=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+  # If there's no public IP assigned (e.g. this host is running on an internal subnet in a VPC), then
+  # curl will happily spit out the contents of AWS's 404 page and an exit code of zero.
+  #
+  # The string containing the 404 page trips up one of easyrsa's calls to openssl later; whichever
+  # one creates the CA certificate, because the 404 page is > 64 characters.
+  if cert_ip=$(curl -f -s http://169.254.169.254/latest/meta-data/public-ipv4); then
+    :
+  else
+    cert_ip=$(curl -f -s http://169.254.169.254/latest/meta-data/local-ipv4)
+  fi
+fi
+
+if [ "$cert_ip" == "_use_azure_dns_name_" ]; then
+  cert_ip=$(uname -n | awk -F. '{ print $2 }').cloudapp.net
+  use_cn=true
 fi
 
 sans="IP:${cert_ip}"
@@ -85,7 +99,11 @@ else
     cp -p pki/issued/kubernetes-master.crt "${cert_dir}/server.cert" > /dev/null 2>&1
     cp -p pki/private/kubernetes-master.key "${cert_dir}/server.key" > /dev/null 2>&1
 fi
-./easyrsa build-client-full kubecfg nopass > /dev/null 2>&1
+# Make a superuser client cert with subject "O=system:masters, CN=kubecfg"
+./easyrsa --dn-mode=org \
+  --req-cn=kubecfg --req-org=system:masters \
+  --req-c= --req-st= --req-city= --req-email= --req-ou= \
+  build-client-full kubecfg nopass > /dev/null 2>&1
 cp -p pki/ca.crt "${cert_dir}/ca.crt"
 cp -p pki/issued/kubecfg.crt "${cert_dir}/kubecfg.crt"
 cp -p pki/private/kubecfg.key "${cert_dir}/kubecfg.key"

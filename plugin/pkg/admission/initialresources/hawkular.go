@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,18 +20,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"github.com/golang/glog"
-	"github.com/hawkular/hawkular-client-go/metrics"
 	"io/ioutil"
-	"k8s.io/kubernetes/pkg/api"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
+	"github.com/golang/glog"
+	"github.com/hawkular/hawkular-client-go/metrics"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/kubernetes/pkg/api"
+
+	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 type hawkularSource struct {
@@ -89,7 +91,7 @@ func (hs *hawkularSource) GetUsagePercentile(kind api.ResourceName, perc int64, 
 	m := make([]metrics.Modifier, len(hs.modifiers), 2+len(hs.modifiers))
 	copy(m, hs.modifiers)
 
-	if namespace != api.NamespaceAll {
+	if namespace != metav1.NamespaceAll {
 		m = append(m, metrics.Tenant(namespace))
 	}
 
@@ -162,7 +164,7 @@ func (hs *hawkularSource) init() error {
 
 	if v, found := opts["auth"]; found {
 		if _, f := opts["caCert"]; f {
-			return fmt.Errorf("Both auth and caCert files provided, combination is not supported")
+			return fmt.Errorf("both auth and caCert files provided, combination is not supported")
 		}
 		if len(v[0]) > 0 {
 			// Authfile
@@ -172,7 +174,7 @@ func (hs *hawkularSource) init() error {
 			if err != nil {
 				return err
 			}
-			tC, err = client.TLSConfigFor(kubeConfig)
+			tC, err = restclient.TLSConfigFor(kubeConfig)
 			if err != nil {
 				return err
 			}
@@ -181,7 +183,7 @@ func (hs *hawkularSource) init() error {
 
 	if u, found := opts["user"]; found {
 		if _, wrong := opts["useServiceAccount"]; wrong {
-			return fmt.Errorf("If user and password are used, serviceAccount cannot be used")
+			return fmt.Errorf("if user and password are used, serviceAccount cannot be used")
 		}
 		if p, f := opts["pass"]; f {
 			hs.modifiers = append(hs.modifiers, func(req *http.Request) error {

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,30 +23,73 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"k8s.io/kubernetes/pkg/api"
-	clientset "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/tools/cache"
+	"k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/client/clientset_generated/clientset"
+	coreinformers "k8s.io/kubernetes/pkg/client/informers/informers_generated/externalversions/core/v1"
+	corelisters "k8s.io/kubernetes/pkg/client/listers/core/v1"
 	"k8s.io/kubernetes/pkg/cloudprovider"
-	"k8s.io/kubernetes/pkg/util/wait"
+	"k8s.io/kubernetes/pkg/util/metrics"
+	nodeutil "k8s.io/kubernetes/pkg/util/node"
+)
+
+const (
+	// Maximal number of concurrent CreateRoute API calls.
+	// TODO: This should be per-provider.
+	maxConcurrentRouteCreations int = 200
+	// Maximum number of retries of route creations.
+	maxRetries int = 5
+	// Maximum number of retries of node status update.
+	updateNodeStatusMaxRetries int = 3
 )
 
 type RouteController struct {
-	routes      cloudprovider.Routes
-	kubeClient  clientset.Interface
-	clusterName string
-	clusterCIDR *net.IPNet
+	routes           cloudprovider.Routes
+	kubeClient       clientset.Interface
+	clusterName      string
+	clusterCIDR      *net.IPNet
+	nodeLister       corelisters.NodeLister
+	nodeListerSynced cache.InformerSynced
 }
 
-func New(routes cloudprovider.Routes, kubeClient clientset.Interface, clusterName string, clusterCIDR *net.IPNet) *RouteController {
-	return &RouteController{
-		routes:      routes,
-		kubeClient:  kubeClient,
-		clusterName: clusterName,
-		clusterCIDR: clusterCIDR,
+func New(routes cloudprovider.Routes, kubeClient clientset.Interface, nodeInformer coreinformers.NodeInformer, clusterName string, clusterCIDR *net.IPNet) *RouteController {
+	if kubeClient != nil && kubeClient.Core().RESTClient().GetRateLimiter() != nil {
+		metrics.RegisterMetricAndTrackRateLimiterUsage("route_controller", kubeClient.Core().RESTClient().GetRateLimiter())
 	}
+	rc := &RouteController{
+		routes:           routes,
+		kubeClient:       kubeClient,
+		clusterName:      clusterName,
+		clusterCIDR:      clusterCIDR,
+		nodeLister:       nodeInformer.Lister(),
+		nodeListerSynced: nodeInformer.Informer().HasSynced,
+	}
+
+	return rc
 }
 
-func (rc *RouteController) Run(syncPeriod time.Duration) {
-	go wait.Until(func() {
+func (rc *RouteController) Run(stopCh <-chan struct{}, syncPeriod time.Duration) {
+	defer utilruntime.HandleCrash()
+
+	glog.Info("Starting the route controller")
+
+	if !cache.WaitForCacheSync(stopCh, rc.nodeListerSynced) {
+		utilruntime.HandleError(fmt.Errorf("timed out waiting for caches to sync"))
+		return
+	}
+
+	// TODO: If we do just the full Resync every 5 minutes (default value)
+	// that means that we may wait up to 5 minutes before even starting
+	// creating a route for it. This is bad.
+	// We should have a watch on node and if we observe a new node (with CIDR?)
+	// trigger reconciliation for that node.
+	go wait.NonSlidingUntil(func() {
 		if err := rc.reconcileNodeRoutes(); err != nil {
 			glog.Errorf("Couldn't reconcile node routes: %v", err)
 		}
@@ -58,66 +101,126 @@ func (rc *RouteController) reconcileNodeRoutes() error {
 	if err != nil {
 		return fmt.Errorf("error listing routes: %v", err)
 	}
-	// TODO (cjcullen): use pkg/controller/framework.NewInformer to watch this
-	// and reduce the number of lists needed.
-	nodeList, err := rc.kubeClient.Core().Nodes().List(api.ListOptions{})
+	nodes, err := rc.nodeLister.List(labels.Everything())
 	if err != nil {
 		return fmt.Errorf("error listing nodes: %v", err)
 	}
-	return rc.reconcile(nodeList.Items, routeList)
+	return rc.reconcile(nodes, routeList)
 }
 
-func (rc *RouteController) reconcile(nodes []api.Node, routes []*cloudprovider.Route) error {
+func (rc *RouteController) reconcile(nodes []*v1.Node, routes []*cloudprovider.Route) error {
 	// nodeCIDRs maps nodeName->nodeCIDR
-	nodeCIDRs := make(map[string]string)
-	// routeMap maps routeTargetInstance->route
-	routeMap := make(map[string]*cloudprovider.Route)
+	nodeCIDRs := make(map[types.NodeName]string)
+	// routeMap maps routeTargetNode->route
+	routeMap := make(map[types.NodeName]*cloudprovider.Route)
 	for _, route := range routes {
-		routeMap[route.TargetInstance] = route
+		routeMap[route.TargetNode] = route
 	}
+
 	wg := sync.WaitGroup{}
+	rateLimiter := make(chan struct{}, maxConcurrentRouteCreations)
+
 	for _, node := range nodes {
 		// Skip if the node hasn't been assigned a CIDR yet.
 		if node.Spec.PodCIDR == "" {
 			continue
 		}
+		nodeName := types.NodeName(node.Name)
 		// Check if we have a route for this node w/ the correct CIDR.
-		r := routeMap[node.Name]
+		r := routeMap[nodeName]
 		if r == nil || r.DestinationCIDR != node.Spec.PodCIDR {
 			// If not, create the route.
 			route := &cloudprovider.Route{
-				TargetInstance:  node.Name,
+				TargetNode:      nodeName,
 				DestinationCIDR: node.Spec.PodCIDR,
 			}
 			nameHint := string(node.UID)
 			wg.Add(1)
-			go func(nameHint string, route *cloudprovider.Route) {
-				if err := rc.routes.CreateRoute(rc.clusterName, nameHint, route); err != nil {
-					glog.Errorf("Could not create route %s %s: %v", nameHint, route.DestinationCIDR, err)
+			go func(nodeName types.NodeName, nameHint string, route *cloudprovider.Route) {
+				defer wg.Done()
+				for i := 0; i < maxRetries; i++ {
+					startTime := time.Now()
+					// Ensure that we don't have more than maxConcurrentRouteCreations
+					// CreateRoute calls in flight.
+					rateLimiter <- struct{}{}
+					glog.Infof("Creating route for node %s %s with hint %s, throttled %v", nodeName, route.DestinationCIDR, nameHint, time.Now().Sub(startTime))
+					err := rc.routes.CreateRoute(rc.clusterName, nameHint, route)
+					<-rateLimiter
+
+					rc.updateNetworkingCondition(nodeName, err == nil)
+					if err != nil {
+						glog.Errorf("Could not create route %s %s for node %s after %v: %v", nameHint, route.DestinationCIDR, nodeName, time.Now().Sub(startTime), err)
+					} else {
+						glog.Infof("Created route for node %s %s with hint %s after %v", nodeName, route.DestinationCIDR, nameHint, time.Now().Sub(startTime))
+						return
+					}
 				}
-				wg.Done()
-			}(nameHint, route)
+			}(nodeName, nameHint, route)
+		} else {
+			// Update condition only if it doesn't reflect the current state.
+			_, condition := v1.GetNodeCondition(&node.Status, v1.NodeNetworkUnavailable)
+			if condition == nil || condition.Status != v1.ConditionFalse {
+				rc.updateNetworkingCondition(types.NodeName(node.Name), true)
+			}
 		}
-		nodeCIDRs[node.Name] = node.Spec.PodCIDR
+		nodeCIDRs[nodeName] = node.Spec.PodCIDR
 	}
-	wg.Wait()
 	for _, route := range routes {
 		if rc.isResponsibleForRoute(route) {
 			// Check if this route applies to a node we know about & has correct CIDR.
-			if nodeCIDRs[route.TargetInstance] != route.DestinationCIDR {
+			if nodeCIDRs[route.TargetNode] != route.DestinationCIDR {
 				wg.Add(1)
 				// Delete the route.
-				go func(route *cloudprovider.Route) {
+				go func(route *cloudprovider.Route, startTime time.Time) {
+					glog.Infof("Deleting route %s %s", route.Name, route.DestinationCIDR)
 					if err := rc.routes.DeleteRoute(rc.clusterName, route); err != nil {
-						glog.Errorf("Could not delete route %s %s: %v", route.Name, route.DestinationCIDR, err)
+						glog.Errorf("Could not delete route %s %s after %v: %v", route.Name, route.DestinationCIDR, time.Now().Sub(startTime), err)
+					} else {
+						glog.Infof("Deleted route %s %s after %v", route.Name, route.DestinationCIDR, time.Now().Sub(startTime))
 					}
 					wg.Done()
-				}(route)
+
+				}(route, time.Now())
 			}
 		}
 	}
 	wg.Wait()
 	return nil
+}
+
+func (rc *RouteController) updateNetworkingCondition(nodeName types.NodeName, routeCreated bool) error {
+	var err error
+	for i := 0; i < updateNodeStatusMaxRetries; i++ {
+		// Patch could also fail, even though the chance is very slim. So we still do
+		// patch in the retry loop.
+		currentTime := metav1.Now()
+		if routeCreated {
+			err = nodeutil.SetNodeCondition(rc.kubeClient, nodeName, v1.NodeCondition{
+				Type:               v1.NodeNetworkUnavailable,
+				Status:             v1.ConditionFalse,
+				Reason:             "RouteCreated",
+				Message:            "RouteController created a route",
+				LastTransitionTime: currentTime,
+			})
+		} else {
+			err = nodeutil.SetNodeCondition(rc.kubeClient, nodeName, v1.NodeCondition{
+				Type:               v1.NodeNetworkUnavailable,
+				Status:             v1.ConditionTrue,
+				Reason:             "NoRouteCreated",
+				Message:            "RouteController failed to create a route",
+				LastTransitionTime: currentTime,
+			})
+		}
+		if err == nil {
+			return nil
+		}
+		if i == updateNodeStatusMaxRetries || !errors.IsConflict(err) {
+			glog.Errorf("Error updating node %s: %v", nodeName, err)
+			return err
+		}
+		glog.Errorf("Error updating node %s, retrying: %v", nodeName, err)
+	}
+	return err
 }
 
 func (rc *RouteController) isResponsibleForRoute(route *cloudprovider.Route) bool {

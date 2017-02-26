@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,9 +53,40 @@ ensure-packages() {
   :
 }
 
+function create-node-pki {
+  echo "Creating node pki files"
+
+  local -r pki_dir="/etc/kubernetes/pki"
+  mkdir -p "${pki_dir}"
+
+  if [[ -z "${CA_CERT_BUNDLE:-}" ]]; then
+    CA_CERT_BUNDLE="${CA_CERT}"
+    CA_CERT_BUNDLE_PATH="${pki_dir}/ca-certificates.crt"
+    echo "${CA_CERT_BUNDLE}" | base64 --decode > "${CA_CERT_BUNDLE_PATH}"
+  fi
+
+  if [[ ! -z "${KUBELET_CERT:-}" && ! -z "${KUBELET_KEY:-}" ]]; then
+    KUBELET_CERT_PATH="${pki_dir}/kubelet.crt"
+    echo "${KUBELET_CERT}" | base64 --decode > "${KUBELET_CERT_PATH}"
+
+    KUBELET_KEY_PATH="${pki_dir}/kubelet.key"
+    echo "${KUBELET_KEY}" | base64 --decode > "${KUBELET_KEY_PATH}"
+  fi
+}
+
 # A hookpoint for setting up local devices
 ensure-local-disks() {
-  :
+ for ssd in /dev/disk/by-id/google-local-ssd-*; do
+    if [ -e "$ssd" ]; then
+      ssdnum=`echo $ssd | sed -e 's/\/dev\/disk\/by-id\/google-local-ssd-\([0-9]*\)/\1/'`
+      echo "Formatting and mounting local SSD $ssd to /mnt/disks/ssd$ssdnum"
+      mkdir -p /mnt/disks/ssd$ssdnum
+      /usr/share/google/safe_format_and_mount -m "mkfs.ext4 -F" "${ssd}" /mnt/disks/ssd$ssdnum &>/var/log/local-ssd-$ssdnum-mount.log || \
+      { echo "Local SSD $ssdnum mount failed, review /var/log/local-ssd-$ssdnum-mount.log"; return 1; }
+    else
+      echo "No local SSD disks found."
+    fi
+  done
 }
 
 function ensure-install-dir() {
@@ -77,8 +108,6 @@ function set-broken-motd() {
 function reset-motd() {
   # kubelet is installed both on the master and nodes, and the version is easy to parse (unlike kubectl)
   local -r version="$(/usr/local/bin/kubelet --version=true | cut -f2 -d " ")"
-  # This regex grabs the minor version, e.g. v1.2.
-  local -r minor="$(echo ${version} | sed -r "s/(v[0-9]+\.[0-9]+).*/\1/g")"
   # This logic grabs either a release tag (v1.2.1 or v1.2.1-alpha.1),
   # or the git hash that's in the build info.
   local gitref="$(echo "${version}" | sed -r "s/(v[0-9]+\.[0-9]+\.[0-9]+)(-[a-z]+\.[0-9]+)?.*/\1\2/g")"
@@ -95,15 +124,20 @@ If it isn't, the closest tag is at:
 
 Welcome to Kubernetes ${version}!
 
-You can find documentation for this release at:
-  http://kubernetes.io/${minor}/
+You can find documentation for Kubernetes at:
+  http://docs.kubernetes.io/
 
-You can download the build image for this release at:
+The source for this release can be found at:
+  /usr/local/share/doc/kubernetes/kubernetes-src.tar.gz
+Or you can download it at:
   https://storage.googleapis.com/kubernetes-release/release/${version}/kubernetes-src.tar.gz
 
 It is based on the Kubernetes source at:
   https://github.com/kubernetes/kubernetes/tree/${gitref}
 ${devel}
+For Kubernetes copyright and licensing information, see:
+  /usr/local/share/doc/kubernetes/LICENSES
+
 EOF
 }
 
@@ -129,6 +163,23 @@ for k,v in yaml.load(sys.stdin).iteritems():
   ' < """${kube_env_yaml}""")"
 }
 
+function set-kube-master-certs() {
+  local kube_master_certs_yaml="${INSTALL_DIR}/kube_master_certs.yaml"
+
+  until curl-metadata kube-master-certs > "${kube_master_certs_yaml}"; do
+    echo 'Waiting for kube-master-certs...'
+    sleep 3
+  done
+
+  eval "$(python -c '
+import pipes,sys,yaml
+
+for k,v in yaml.load(sys.stdin).iteritems():
+  print("""readonly {var}={value}""".format(var = k, value = pipes.quote(str(v))))
+  print("""export {var}""".format(var = k))
+  ' < """${kube_master_certs_yaml}""")"
+}
+
 function remove-docker-artifacts() {
   echo "== Deleting docker0 =="
   apt-get-install bridge-utils
@@ -140,15 +191,32 @@ function remove-docker-artifacts() {
   echo "== Finished deleting docker0 =="
 }
 
-# Retry a download until we get it.
+# Retry a download until we get it. Takes a hash and a set of URLs.
 #
-# $1 is the URL to download
+# $1 is the sha1 of the URL. Can be "" if the sha1 is unknown.
+# $2+ are the URLs to download.
 download-or-bust() {
-  local -r url="$1"
-  local -r file="${url##*/}"
-  rm -f "$file"
-  until curl --ipv4 -Lo "$file" --connect-timeout 20 --retry 6 --retry-delay 10 "${url}"; do
-    echo "Failed to download file (${url}). Retrying."
+  local -r hash="$1"
+  shift 1
+
+  urls=( $* )
+  while true; do
+    for url in "${urls[@]}"; do
+      local file="${url##*/}"
+      rm -f "${file}"
+      if ! curl -f --ipv4 -Lo "${file}" --connect-timeout 20 --max-time 300 --retry 6 --retry-delay 10 "${url}"; then
+        echo "== Failed to download ${url}. Retrying. =="
+      elif [[ -n "${hash}" ]] && ! validate-hash "${file}" "${hash}"; then
+        echo "== Hash validation of ${url} failed. Retrying. =="
+      else
+        if [[ -n "${hash}" ]]; then
+          echo "== Downloaded ${url} (SHA1 = ${hash}) =="
+        else
+          echo "== Downloaded ${url} =="
+        fi
+        return
+      fi
+    done
   done
 }
 
@@ -195,6 +263,57 @@ apt-get-update() {
   done
 }
 
+# Restart any services that need restarting due to a library upgrade
+# Uses needrestart
+restart-updated-services() {
+  # We default to restarting services, because this is only done as part of an update
+  if [[ "${AUTO_RESTART_SERVICES:-true}" != "true" ]]; then
+    echo "Auto restart of services prevented by AUTO_RESTART_SERVICES=${AUTO_RESTART_SERVICES}"
+    return
+  fi
+  echo "Restarting services with updated libraries (needrestart -r a)"
+  # The pipes make sure that needrestart doesn't think it is running with a TTY
+  # Debian bug #803249; fixed but not necessarily in package repos yet
+  echo "" | needrestart -r a 2>&1 | tee /dev/null
+}
+
+# Reboot the machine if /var/run/reboot-required exists
+reboot-if-required() {
+  if [[ ! -e "/var/run/reboot-required" ]]; then
+    return
+  fi
+
+  echo "Reboot is required (/var/run/reboot-required detected)"
+  if [[ -e "/var/run/reboot-required.pkgs" ]]; then
+    echo "Packages that triggered reboot:"
+    cat /var/run/reboot-required.pkgs
+  fi
+
+  # We default to rebooting the machine because this is only done as part of an update
+  if [[ "${AUTO_REBOOT:-true}" != "true" ]]; then
+    echo "Reboot prevented by AUTO_REBOOT=${AUTO_REBOOT}"
+    return
+  fi
+
+  rm -f /var/run/reboot-required
+  rm -f /var/run/reboot-required.pkgs
+  echo "Triggering reboot"
+  init 6
+}
+
+# Install upgrades using unattended-upgrades, then reboot or restart services
+auto-upgrade() {
+  # We default to not installing upgrades
+  if [[ "${AUTO_UPGRADE:-false}" != "true" ]]; then
+    echo "AUTO_UPGRADE not set to true; won't auto-upgrade"
+    return
+  fi
+  apt-get-install unattended-upgrades needrestart
+  unattended-upgrade --debug
+  reboot-if-required # We may reboot the machine right here
+  restart-updated-services
+}
+
 #
 # Install salt from GCS.  See README.md for instructions on how to update these
 # debs.
@@ -223,7 +342,7 @@ install-salt() {
 
   for deb in "${DEBS[@]}"; do
     if [ ! -e "${deb}" ]; then
-      download-or-bust "${URL_BASE}/${deb}"
+      download-or-bust "" "${URL_BASE}/${deb}"
     fi
   done
 
@@ -279,7 +398,6 @@ stop-salt-minion() {
 # Finds the master PD device; returns it in MASTER_PD_DEVICE
 find-master-pd() {
   MASTER_PD_DEVICE=""
-  # TODO(zmerlynn): GKE is still lagging in master-pd creation
   if [[ ! -e /dev/disk/by-id/google-master-pd ]]; then
     return
   fi
@@ -297,7 +415,7 @@ find-master-pd() {
 # already exists.
 mount-master-pd() {
   find-master-pd
-  if [[ -z "${MASTER_PD_DEVICE}" ]]; then
+  if [[ -z "${MASTER_PD_DEVICE:-}" ]]; then
     return
   fi
 
@@ -342,37 +460,89 @@ function create-salt-pillar() {
   mkdir -p /srv/salt-overlay/pillar
   cat <<EOF >/srv/salt-overlay/pillar/cluster-params.sls
 instance_prefix: '$(echo "$INSTANCE_PREFIX" | sed -e "s/'/''/g")'
+node_tags: '$(echo "$NODE_TAGS" | sed -e "s/'/''/g")'
 node_instance_prefix: '$(echo "$NODE_INSTANCE_PREFIX" | sed -e "s/'/''/g")'
 cluster_cidr: '$(echo "$CLUSTER_IP_RANGE" | sed -e "s/'/''/g")'
 allocate_node_cidrs: '$(echo "$ALLOCATE_NODE_CIDRS" | sed -e "s/'/''/g")'
+non_masquerade_cidr: '$(echo "$NON_MASQUERADE_CIDR" | sed -e "s/'/''/g")'
 service_cluster_ip_range: '$(echo "$SERVICE_CLUSTER_IP_RANGE" | sed -e "s/'/''/g")'
 enable_cluster_monitoring: '$(echo "$ENABLE_CLUSTER_MONITORING" | sed -e "s/'/''/g")'
 enable_cluster_logging: '$(echo "$ENABLE_CLUSTER_LOGGING" | sed -e "s/'/''/g")'
 enable_cluster_ui: '$(echo "$ENABLE_CLUSTER_UI" | sed -e "s/'/''/g")'
+enable_node_problem_detector: '$(echo "$ENABLE_NODE_PROBLEM_DETECTOR" | sed -e "s/'/''/g")'
 enable_l7_loadbalancing: '$(echo "$ENABLE_L7_LOADBALANCING" | sed -e "s/'/''/g")'
 enable_node_logging: '$(echo "$ENABLE_NODE_LOGGING" | sed -e "s/'/''/g")'
+enable_rescheduler: '$(echo "$ENABLE_RESCHEDULER" | sed -e "s/'/''/g")'
 logging_destination: '$(echo "$LOGGING_DESTINATION" | sed -e "s/'/''/g")'
 elasticsearch_replicas: '$(echo "$ELASTICSEARCH_LOGGING_REPLICAS" | sed -e "s/'/''/g")'
 enable_cluster_dns: '$(echo "$ENABLE_CLUSTER_DNS" | sed -e "s/'/''/g")'
 enable_cluster_registry: '$(echo "$ENABLE_CLUSTER_REGISTRY" | sed -e "s/'/''/g")'
-dns_replicas: '$(echo "$DNS_REPLICAS" | sed -e "s/'/''/g")'
 dns_server: '$(echo "$DNS_SERVER_IP" | sed -e "s/'/''/g")'
 dns_domain: '$(echo "$DNS_DOMAIN" | sed -e "s/'/''/g")'
+enable_dns_horizontal_autoscaler: '$(echo "$ENABLE_DNS_HORIZONTAL_AUTOSCALER" | sed -e "s/'/''/g")'
 admission_control: '$(echo "$ADMISSION_CONTROL" | sed -e "s/'/''/g")'
 network_provider: '$(echo "$NETWORK_PROVIDER" | sed -e "s/'/''/g")'
+prepull_e2e_images: '$(echo "$PREPULL_E2E_IMAGES" | sed -e "s/'/''/g")'
 hairpin_mode: '$(echo "$HAIRPIN_MODE" | sed -e "s/'/''/g")'
+softlockup_panic: '$(echo "$SOFTLOCKUP_PANIC" | sed -e "s/'/''/g")'
 opencontrail_tag: '$(echo "$OPENCONTRAIL_TAG" | sed -e "s/'/''/g")'
 opencontrail_kubernetes_tag: '$(echo "$OPENCONTRAIL_KUBERNETES_TAG")'
 opencontrail_public_subnet: '$(echo "$OPENCONTRAIL_PUBLIC_SUBNET")'
-enable_manifest_url: '$(echo "$ENABLE_MANIFEST_URL" | sed -e "s/'/''/g")'
-manifest_url: '$(echo "$MANIFEST_URL" | sed -e "s/'/''/g")'
-manifest_url_header: '$(echo "$MANIFEST_URL_HEADER" | sed -e "s/'/''/g")'
-num_nodes: $(echo "${NUM_NODES}" | sed -e "s/'/''/g")
+network_policy_provider: '$(echo "$NETWORK_POLICY_PROVIDER" | sed -e "s/'/''/g")'
+enable_manifest_url: '$(echo "${ENABLE_MANIFEST_URL:-}" | sed -e "s/'/''/g")'
+manifest_url: '$(echo "${MANIFEST_URL:-}" | sed -e "s/'/''/g")'
+manifest_url_header: '$(echo "${MANIFEST_URL_HEADER:-}" | sed -e "s/'/''/g")'
+num_nodes: $(echo "${NUM_NODES:-}" | sed -e "s/'/''/g")
 e2e_storage_test_environment: '$(echo "$E2E_STORAGE_TEST_ENVIRONMENT" | sed -e "s/'/''/g")'
+kube_uid: '$(echo "${KUBE_UID}" | sed -e "s/'/''/g")'
+initial_etcd_cluster: '$(echo "${INITIAL_ETCD_CLUSTER:-}" | sed -e "s/'/''/g")'
+initial_etcd_cluster_state: '$(echo "${INITIAL_ETCD_CLUSTER_STATE:-}" | sed -e "s/'/''/g")'
+ca_cert_bundle_path: '$(echo "${CA_CERT_BUNDLE_PATH:-}" | sed -e "s/'/''/g")'
+hostname: $(hostname -s)
+enable_default_storage_class: '$(echo "$ENABLE_DEFAULT_STORAGE_CLASS" | sed -e "s/'/''/g")'
 EOF
+    if [ -n "${STORAGE_BACKEND:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+storage_backend: '$(echo "$STORAGE_BACKEND" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${STORAGE_MEDIA_TYPE:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+storage_media_type: '$(echo "$STORAGE_MEDIA_TYPE" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${ADMISSION_CONTROL:-}" ] && [ ${ADMISSION_CONTROL} == *"ImagePolicyWebhook"* ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+admission-control-config-file: /etc/admission_controller.config
+EOF
+    fi
     if [ -n "${KUBELET_PORT:-}" ]; then
       cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
 kubelet_port: '$(echo "$KUBELET_PORT" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${ETCD_IMAGE:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+etcd_docker_tag: '$(echo "$ETCD_IMAGE" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${ETCD_VERSION:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+etcd_version: '$(echo "$ETCD_VERSION" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [[ -n "${ETCD_CA_KEY:-}" && -n "${ETCD_CA_CERT:-}" && -n "${ETCD_PEER_KEY:-}" && -n "${ETCD_PEER_CERT:-}" ]]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+etcd_over_ssl: 'true'
+EOF
+    else
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+etcd_over_ssl: 'false'
+EOF
+    fi
+    if [ -n "${ETCD_QUORUM_READ:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+etcd_quorum_read: '$(echo "${ETCD_QUORUM_READ}" | sed -e "s/'/''/g")'
 EOF
     fi
     # Configuration changes for test clusters
@@ -394,6 +564,11 @@ EOF
     if [ -n "${KUBELET_TEST_LOG_LEVEL:-}" ]; then
       cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
 kubelet_test_log_level: '$(echo "$KUBELET_TEST_LOG_LEVEL" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [ -n "${DOCKER_TEST_LOG_LEVEL:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+docker_test_log_level: '$(echo "$DOCKER_TEST_LOG_LEVEL" | sed -e "s/'/''/g")'
 EOF
     fi
     if [ -n "${CONTROLLER_MANAGER_TEST_ARGS:-}" ]; then
@@ -449,6 +624,41 @@ EOF
 node_labels: '$(echo "${NODE_LABELS}" | sed -e "s/'/''/g")'
 EOF
     fi
+    if [ -n "${EVICTION_HARD:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+eviction_hard: '$(echo "${EVICTION_HARD}" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [[ "${ENABLE_CLUSTER_AUTOSCALER:-false}" == "true" ]]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+enable_cluster_autoscaler: '$(echo "${ENABLE_CLUSTER_AUTOSCALER}" | sed -e "s/'/''/g")'
+autoscaler_mig_config: '$(echo "${AUTOSCALER_MIG_CONFIG}" | sed -e "s/'/''/g")'
+EOF
+    fi
+    if [[ "${FEDERATION:-}" == "true" ]]; then
+      local federations_domain_map="${FEDERATIONS_DOMAIN_MAP:-}"
+      if [[ -z "${federations_domain_map}" && -n "${FEDERATION_NAME:-}" && -n "${DNS_ZONE_NAME:-}" ]]; then
+        federations_domain_map="${FEDERATION_NAME}=${DNS_ZONE_NAME}"
+      fi
+      if [[ -n "${federations_domain_map}" ]]; then
+        cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+federations_domain_map: '$(echo "- --federations=${federations_domain_map}" | sed -e "s/'/''/g")'
+EOF
+      else
+        cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+federations_domain_map: ''
+EOF
+      fi
+    else
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+federations_domain_map: ''
+EOF
+    fi
+    if [ -n "${SCHEDULING_ALGORITHM_PROVIDER:-}" ]; then
+      cat <<EOF >>/srv/salt-overlay/pillar/cluster-params.sls
+scheduling_algorithm_provider: '$(echo "${SCHEDULING_ALGORITHM_PROVIDER}" | sed -e "s/'/''/g")'
+EOF
+    fi
 }
 
 # The job of this function is simple, but the basic regular expression syntax makes
@@ -475,7 +685,7 @@ function convert-bytes-gce-kube() {
 #  - Optionally uses KUBECFG_CERT and KUBECFG_KEY to store a copy of the client
 #    cert credentials.
 #
-# After the first boot and on upgrade, these files exists on the master-pd
+# After the first boot and on upgrade, these files exist on the master-pd
 # and should never be touched again (except perhaps an additional service
 # account, see NB below.)
 function create-salt-master-auth() {
@@ -483,14 +693,21 @@ function create-salt-master-auth() {
     if  [[ ! -z "${CA_CERT:-}" ]] && [[ ! -z "${MASTER_CERT:-}" ]] && [[ ! -z "${MASTER_KEY:-}" ]]; then
       mkdir -p /srv/kubernetes
       (umask 077;
-        echo "${CA_CERT}" | base64 -d > /srv/kubernetes/ca.crt;
-        echo "${MASTER_CERT}" | base64 -d > /srv/kubernetes/server.cert;
-        echo "${MASTER_KEY}" | base64 -d > /srv/kubernetes/server.key;
+        echo "${CA_CERT}" | base64 --decode > /srv/kubernetes/ca.crt;
+        echo "${MASTER_CERT}" | base64 --decode > /srv/kubernetes/server.cert;
+        echo "${MASTER_KEY}" | base64 --decode > /srv/kubernetes/server.key;
         # Kubecfg cert/key are optional and included for backwards compatibility.
         # TODO(roberthbailey): Remove these two lines once GKE no longer requires
         # fetching clients certs from the master VM.
-        echo "${KUBECFG_CERT:-}" | base64 -d > /srv/kubernetes/kubecfg.crt;
-        echo "${KUBECFG_KEY:-}" | base64 -d > /srv/kubernetes/kubecfg.key)
+        echo "${KUBECFG_CERT:-}" | base64 --decode > /srv/kubernetes/kubecfg.crt;
+        echo "${KUBECFG_KEY:-}" | base64 --decode > /srv/kubernetes/kubecfg.key)
+    fi
+  fi
+  if [ ! -e /srv/kubernetes/kubeapiserver.cert ]; then
+    if [[ ! -z "${KUBEAPISERVER_CERT:-}" ]] && [[ ! -z "${KUBEAPISERVER_KEY:-}" ]]; then
+      (umask 077;
+        echo "${KUBEAPISERVER_CERT}" | base64 --decode > /srv/kubernetes/kubeapiserver.cert;
+        echo "${KUBEAPISERVER_KEY}" | base64 --decode > /srv/kubernetes/kubeapiserver.key)
     fi
   fi
   if [ ! -e "${BASIC_AUTH_FILE}" ]; then
@@ -504,17 +721,6 @@ function create-salt-master-auth() {
       echo "${KUBE_BEARER_TOKEN},admin,admin" > "${KNOWN_TOKENS_FILE}";
       echo "${KUBELET_TOKEN},kubelet,kubelet" >> "${KNOWN_TOKENS_FILE}";
       echo "${KUBE_PROXY_TOKEN},kube_proxy,kube_proxy" >> "${KNOWN_TOKENS_FILE}")
-
-    # Generate tokens for other "service accounts".  Append to known_tokens.
-    #
-    # NB: If this list ever changes, this script actually has to
-    # change to detect the existence of this file, kill any deleted
-    # old tokens and add any new tokens (to handle the upgrade case).
-    local -r service_accounts=("system:scheduler" "system:controller_manager" "system:logging" "system:monitoring" "system:dns")
-    for account in "${service_accounts[@]}"; do
-      token=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
-      echo "${token},${account},${account}" >> "${KNOWN_TOKENS_FILE}"
-    done
   fi
 }
 
@@ -542,11 +748,6 @@ function create-salt-master-kubelet-auth() {
 function create-salt-kubelet-auth() {
   local -r kubelet_kubeconfig_file="/srv/salt-overlay/salt/kubelet/kubeconfig"
   if [ ! -e "${kubelet_kubeconfig_file}" ]; then
-    # If there isn't a CA certificate set specifically for the kubelet, use
-    # the cluster CA certificate.
-    if [[ -z "${KUBELET_CA_CERT:-}" ]]; then
-      KUBELET_CA_CERT="${CA_CERT}"
-    fi
     mkdir -p /srv/salt-overlay/salt/kubelet
     (umask 077;
       cat > "${kubelet_kubeconfig_file}" <<EOF
@@ -555,12 +756,13 @@ kind: Config
 users:
 - name: kubelet
   user:
-    client-certificate-data: ${KUBELET_CERT}
-    client-key-data: ${KUBELET_KEY}
+    client-certificate: ${KUBELET_CERT_PATH}
+    client-key: ${KUBELET_KEY_PATH}
 clusters:
 - name: local
   cluster:
-    certificate-authority-data: ${KUBELET_CA_CERT}
+    server: https://kubernetes-master
+    certificate-authority: ${CA_CERT_BUNDLE_PATH}
 contexts:
 - context:
     cluster: local
@@ -591,7 +793,7 @@ users:
 clusters:
 - name: local
   cluster:
-    certificate-authority-data: ${CA_CERT}
+    certificate-authority-data: ${CA_CERT_BUNDLE}
 contexts:
 - context:
     cluster: local
@@ -603,39 +805,43 @@ EOF
   fi
 }
 
+function split-commas() {
+  echo $1 | tr "," "\n"
+}
+
 function try-download-release() {
   # TODO(zmerlynn): Now we REALLy have no excuse not to do the reboot
   # optimization.
 
-  # TODO(zmerlynn): This may not be set yet by everyone (GKE).
-  if [[ -z "${SERVER_BINARY_TAR_HASH:-}" ]]; then
+  local -r server_binary_tar_urls=( $(split-commas "${SERVER_BINARY_TAR_URL}") )
+  local -r server_binary_tar="${server_binary_tar_urls[0]##*/}"
+  if [[ -n "${SERVER_BINARY_TAR_HASH:-}" ]]; then
+    local -r server_binary_tar_hash="${SERVER_BINARY_TAR_HASH}"
+  else
     echo "Downloading binary release sha1 (not found in env)"
-    download-or-bust "${SERVER_BINARY_TAR_URL}.sha1"
-    SERVER_BINARY_TAR_HASH=$(cat "${SERVER_BINARY_TAR_URL##*/}.sha1")
+    download-or-bust "" "${server_binary_tar_urls[@]/.tar.gz/.tar.gz.sha1}"
+    local -r server_binary_tar_hash=$(cat "${server_binary_tar}.sha1")
   fi
 
-  echo "Downloading binary release tar (${SERVER_BINARY_TAR_URL})"
-  download-or-bust "${SERVER_BINARY_TAR_URL}"
+  echo "Downloading binary release tar (${server_binary_tar_urls[@]})"
+  download-or-bust "${server_binary_tar_hash}" "${server_binary_tar_urls[@]}"
 
-  validate-hash "${SERVER_BINARY_TAR_URL##*/}" "${SERVER_BINARY_TAR_HASH}"
-  echo "Validated ${SERVER_BINARY_TAR_URL} SHA1 = ${SERVER_BINARY_TAR_HASH}"
-
-  # TODO(zmerlynn): This may not be set yet by everyone (GKE).
-  if [[ -z "${SALT_TAR_HASH:-}" ]]; then
+  local -r salt_tar_urls=( $(split-commas "${SALT_TAR_URL}") )
+  local -r salt_tar="${salt_tar_urls[0]##*/}"
+  if [[ -n "${SALT_TAR_HASH:-}" ]]; then
+    local -r salt_tar_hash="${SALT_TAR_HASH}"
+  else
     echo "Downloading Salt tar sha1 (not found in env)"
-    download-or-bust "${SALT_TAR_URL}.sha1"
-    SALT_TAR_HASH=$(cat "${SALT_TAR_URL##*/}.sha1")
+    download-or-bust "" "${salt_tar_urls[@]/.tar.gz/.tar.gz.sha1}"
+    local -r salt_tar_hash=$(cat "${salt_tar}.sha1")
   fi
 
-  echo "Downloading Salt tar ($SALT_TAR_URL)"
-  download-or-bust "$SALT_TAR_URL"
-
-  validate-hash "${SALT_TAR_URL##*/}" "${SALT_TAR_HASH}"
-  echo "Validated ${SALT_TAR_URL} SHA1 = ${SALT_TAR_HASH}"
+  echo "Downloading Salt tar (${salt_tar_urls[@]})"
+  download-or-bust "${salt_tar_hash}" "${salt_tar_urls[@]}"
 
   echo "Unpacking Salt tree and checking integrity of binary release tar"
   rm -rf kubernetes
-  tar xzf "${SALT_TAR_URL##*/}" && tar tzf "${SERVER_BINARY_TAR_URL##*/}" > /dev/null
+  tar xzf "${salt_tar}" && tar tzf "${server_binary_tar}" > /dev/null
 }
 
 function download-release() {
@@ -698,6 +904,19 @@ EOF
 EOF
   fi
 
+  if [[ -n "${NODE_INSTANCE_PREFIX:-}" ]]; then
+    if [[ -n "${NODE_TAGS:-}" ]]; then
+      local -r node_tags="${NODE_TAGS}"
+    else
+      local -r node_tags="${NODE_INSTANCE_PREFIX}"
+    fi
+    cat <<EOF >>/etc/gce.conf
+node-tags = ${NODE_TAGS}
+node-instance-prefix = ${NODE_INSTANCE_PREFIX}
+EOF
+    CLOUD_CONFIG=/etc/gce.conf
+  fi
+
   if [[ -n "${MULTIZONE:-}" ]]; then
     cat <<EOF >>/etc/gce.conf
 multizone = ${MULTIZONE}
@@ -705,20 +924,103 @@ EOF
     CLOUD_CONFIG=/etc/gce.conf
   fi
 
-  if [[ -n ${CLOUD_CONFIG:-} ]]; then
-  cat <<EOF >>/etc/salt/minion.d/grains.conf
+  if [[ -n "${CLOUD_CONFIG:-}" ]]; then
+    cat <<EOF >>/etc/salt/minion.d/grains.conf
   cloud_config: ${CLOUD_CONFIG}
 EOF
   else
     rm -f /etc/gce.conf
   fi
 
+  if [[ -n "${GCP_AUTHN_URL:-}" ]]; then
+    cat <<EOF >>/etc/salt/minion.d/grains.conf
+  webhook_authentication_config: /etc/gcp_authn.config
+EOF
+    cat <<EOF >/etc/gcp_authn.config
+clusters:
+  - name: gcp-authentication-server
+    cluster:
+      server: ${GCP_AUTHN_URL}
+users:
+  - name: kube-apiserver
+    user:
+      auth-provider:
+        name: gcp
+current-context: webhook
+contexts:
+- context:
+    cluster: gcp-authentication-server
+    user: kube-apiserver
+  name: webhook
+EOF
+  fi
+
+  if [[ -n "${GCP_AUTHZ_URL:-}" ]]; then
+    cat <<EOF >>/etc/salt/minion.d/grains.conf
+  webhook_authorization_config: /etc/gcp_authz.config
+EOF
+    cat <<EOF >/etc/gcp_authz.config
+clusters:
+  - name: gcp-authorization-server
+    cluster:
+      server: ${GCP_AUTHZ_URL}
+users:
+  - name: kube-apiserver
+    user:
+      auth-provider:
+        name: gcp
+current-context: webhook
+contexts:
+- context:
+    cluster: gcp-authorization-server
+    user: kube-apiserver
+  name: webhook
+EOF
+  fi
+
+
+  if [[ -n "${GCP_IMAGE_VERIFICATION_URL:-}" ]]; then
+    # This is the config file for the image review webhook.
+    cat <<EOF >>/etc/salt/minion.d/grains.conf
+  image_review_config: /etc/gcp_image_review.config
+EOF
+    cat <<EOF >/etc/gcp_image_review.config
+clusters:
+  - name: gcp-image-review-server
+    cluster:
+      server: ${GCP_IMAGE_VERIFICATION_URL}
+users:
+  - name: kube-apiserver
+    user:
+      auth-provider:
+        name: gcp
+current-context: webhook
+contexts:
+- context:
+    cluster: gcp-image-review-server
+    user: kube-apiserver
+  name: webhook
+EOF
+    # This is the config for the image review admission controller.
+    cat <<EOF >>/etc/salt/minion.d/grains.conf
+  image_review_webhook_config: /etc/admission_controller.config
+EOF
+    cat <<EOF >/etc/admission_controller.config
+imagePolicy:
+  kubeConfigFile: /etc/gcp_image_review.config
+  allowTTL: 30
+  denyTTL: 30
+  retryBackoff: 500
+  defaultAllow: true
+EOF
+  fi
+
+
   # If the kubelet on the master is enabled, give it the same CIDR range
   # as a generic node.
   if [[ ! -z "${KUBELET_APISERVER:-}" ]] && [[ ! -z "${KUBELET_CERT:-}" ]] && [[ ! -z "${KUBELET_KEY:-}" ]]; then
     cat <<EOF >>/etc/salt/minion.d/grains.conf
   kubelet_api_servers: '${KUBELET_APISERVER}'
-  cbr-cidr: 10.123.45.0/30
 EOF
   else
     # If the kubelet is running disconnected from a master, give it a fixed
@@ -729,6 +1031,7 @@ EOF
   fi
 
   env-to-grains "runtime_config"
+  env-to-grains "kube_user"
 }
 
 function salt-node-role() {
@@ -736,7 +1039,6 @@ function salt-node-role() {
 grains:
   roles:
     - kubernetes-pool
-  cbr-cidr: 10.123.45.0/30
   cloud: gce
   api_servers: '${KUBERNETES_MASTER_NAME}'
 EOF
@@ -758,12 +1060,20 @@ function node-docker-opts() {
   if [[ -n "${EXTRA_DOCKER_OPTS-}" ]]; then
     DOCKER_OPTS="${DOCKER_OPTS:-} ${EXTRA_DOCKER_OPTS}"
   fi
+
+  # Decide whether to enable a docker registry mirror. This is taken from
+  # the "kube-env" metadata value.
+  if [[ -n "${DOCKER_REGISTRY_MIRROR_URL:-}" ]]; then
+    echo "Enable docker registry mirror at: ${DOCKER_REGISTRY_MIRROR_URL}"
+    DOCKER_OPTS="${DOCKER_OPTS:-} --registry-mirror=${DOCKER_REGISTRY_MIRROR_URL}"
+  fi
 }
 
 function salt-grains() {
   env-to-grains "docker_opts"
   env-to-grains "docker_root"
   env-to-grains "kubelet_root"
+  env-to-grains "feature_gates"
 }
 
 function configure-salt() {
@@ -785,7 +1095,15 @@ function configure-salt() {
 
 function run-salt() {
   echo "== Calling Salt =="
-  salt-call --local state.highstate || true
+  local rc=0
+  for i in {0..6}; do
+    salt-call --local state.highstate && rc=0 || rc=$?
+    if [[ "${rc}" == 0 ]]; then
+      return 0
+    fi
+  done
+  echo "Salt failed to run repeatedly" >&2
+  return "${rc}"
 }
 
 function run-user-script() {
@@ -796,6 +1114,15 @@ function run-user-script() {
     chmod u+x "${INSTALL_DIR}/k8s-user-script.sh"
     echo "== running user startup script =="
     "${INSTALL_DIR}/k8s-user-script.sh"
+  fi
+}
+
+function create-salt-master-etcd-auth {
+  if [[ -n "${ETCD_CA_CERT:-}" && -n "${ETCD_PEER_KEY:-}" && -n "${ETCD_PEER_CERT:-}" ]]; then
+    local -r auth_dir="/srv/kubernetes"
+    echo "${ETCD_CA_CERT}" | base64 --decode | gunzip > "${auth_dir}/etcd-ca.crt"
+    echo "${ETCD_PEER_KEY}" | base64 --decode > "${auth_dir}/etcd-peer.key"
+    echo "${ETCD_PEER_CERT}" | base64 --decode | gunzip > "${auth_dir}/etcd-peer.crt"
   fi
 }
 
@@ -813,11 +1140,15 @@ if [[ -z "${is_push}" ]]; then
   ensure-install-dir
   ensure-packages
   set-kube-env
+  auto-upgrade
   ensure-local-disks
+  create-node-pki
   [[ "${KUBERNETES_MASTER}" == "true" ]] && mount-master-pd
   create-salt-pillar
   if [[ "${KUBERNETES_MASTER}" == "true" ]]; then
+    set-kube-master-certs
     create-salt-master-auth
+    create-salt-master-etcd-auth
     create-salt-master-kubelet-auth
   else
     create-salt-kubelet-auth

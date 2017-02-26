@@ -1,5 +1,5 @@
 /*
-Copyright 2016 The Kubernetes Authors All rights reserved.
+Copyright 2016 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,12 +23,13 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/golang/glog"
 
-	"k8s.io/kubernetes/pkg/util/sets"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 const (
@@ -37,11 +38,7 @@ const (
 )
 
 // AtomicWriter handles atomically projecting content for a set of files into
-// a target directory.  AtomicWriter maintains a sentinel file named
-// "..sentinel" in the target directory which is updated after new data is
-// projected into the target directory, allowing consumers of the data to
-// listen for updates by monitoring the sentinel file with inotify or
-// fanotify.
+// a target directory.
 //
 // Note:
 //
@@ -55,14 +52,23 @@ const (
 // data directory symlink are created in the writer's target dir.  This scheme
 // allows the files to be atomically updated by changing the target of the
 // data directory symlink.
+//
+// Consumers of the target directory can monitor the ..data symlink using
+// inotify or fanotify to receive events when the content in the volume is
+// updated.
 type AtomicWriter struct {
 	targetDir  string
 	logContext string
 }
 
+type FileProjection struct {
+	Data []byte
+	Mode int32
+}
+
 // NewAtomicWriter creates a new AtomicWriter configured to write to the given
 // target directory, or returns an error if the target directory does not exist.
-func NewAtomicWriter(targetDir, logContext string) (*AtomicWriter, error) {
+func NewAtomicWriter(targetDir string, logContext string) (*AtomicWriter, error) {
 	_, err := os.Stat(targetDir)
 	if os.IsNotExist(err) {
 		return nil, err
@@ -72,9 +78,8 @@ func NewAtomicWriter(targetDir, logContext string) (*AtomicWriter, error) {
 }
 
 const (
-	sentinelFileName = "..sentinel"
-	dataDirName      = "..data"
-	newDataDirName   = "..data_tmp"
+	dataDirName    = "..data"
+	newDataDirName = "..data_tmp"
 )
 
 // Write does an atomic projection of the given payload into the writer's target
@@ -92,7 +97,7 @@ const (
 //  5.  The payload is written to the new timestamped directory
 //  6.  Symlinks and directory for new user-visible files are created (if needed).
 //
-//      For example consider the files:
+//      For example, consider the files:
 //        <target-dir>/podName
 //        <target-dir>/user/labels
 //        <target-dir>/k8s/annotations
@@ -112,11 +117,9 @@ const (
 //  8.  A symlink to the new timestamped directory ..data_tmp is created that will
 //      become the new data directory
 //  9.  The new data directory symlink is renamed to the data directory; rename is atomic
-// 10.  The sentinel file modification and access times are updated (file is created if it does not
-//      already exist)
-// 11.  Old paths are removed from the user-visible portion of the target directory
-// 12.  The previous timestamped directory is removed, if it exists
-func (w *AtomicWriter) Write(payload map[string][]byte) error {
+// 10.  Old paths are removed from the user-visible portion of the target directory
+// 11.  The previous timestamped directory is removed, if it exists
+func (w *AtomicWriter) Write(payload map[string]FileProjection) error {
 	// (1)
 	cleanPayload, err := validatePayload(payload)
 	if err != nil {
@@ -181,7 +184,14 @@ func (w *AtomicWriter) Write(payload map[string][]byte) error {
 	}
 
 	// (9)
-	if err = os.Rename(newDataDirPath, dataDirPath); err != nil {
+	if runtime.GOOS == "windows" {
+		os.Remove(dataDirPath)
+		err = os.Symlink(tsDirName, dataDirPath)
+		os.Remove(newDataDirPath)
+	} else {
+		err = os.Rename(newDataDirPath, dataDirPath)
+	}
+	if err != nil {
 		os.Remove(newDataDirPath)
 		os.RemoveAll(tsDir)
 		glog.Errorf("%s: error renaming symbolic link for data directory %s: %v", w.logContext, newDataDirPath, err)
@@ -189,18 +199,12 @@ func (w *AtomicWriter) Write(payload map[string][]byte) error {
 	}
 
 	// (10)
-	if err = w.touchSentinelFile(); err != nil {
-		glog.Errorf("%s: error touching sentinel file: %v", w.logContext, err)
-		return err
-	}
-
-	// (11)
 	if err = w.removeUserVisiblePaths(pathsToRemove); err != nil {
 		glog.Errorf("%s: error removing old visible symlinks: %v", w.logContext, err)
 		return err
 	}
 
-	// (12)
+	// (11)
 	if len(oldTsDir) > 0 {
 		if err = os.RemoveAll(path.Join(w.targetDir, oldTsDir)); err != nil {
 			glog.Errorf("%s: error removing old data directory %s: %v", w.logContext, oldTsDir, err)
@@ -212,8 +216,8 @@ func (w *AtomicWriter) Write(payload map[string][]byte) error {
 }
 
 // validatePayload returns an error if any path in the payload  returns a copy of the payload with the paths cleaned.
-func validatePayload(payload map[string][]byte) (map[string][]byte, error) {
-	cleanPayload := make(map[string][]byte)
+func validatePayload(payload map[string]FileProjection) (map[string]FileProjection, error) {
+	cleanPayload := make(map[string]FileProjection)
 	for k, content := range payload {
 		if err := validatePath(k); err != nil {
 			return nil, err
@@ -266,9 +270,9 @@ func validatePath(targetPath string) error {
 }
 
 // shouldWritePayload returns whether the payload should be written to disk.
-func (w *AtomicWriter) shouldWritePayload(payload map[string][]byte) (bool, error) {
-	for userVisiblePath, content := range payload {
-		shouldWrite, err := w.shouldWriteFile(path.Join(w.targetDir, userVisiblePath), content)
+func (w *AtomicWriter) shouldWritePayload(payload map[string]FileProjection) (bool, error) {
+	for userVisiblePath, fileProjection := range payload {
+		shouldWrite, err := w.shouldWriteFile(path.Join(w.targetDir, userVisiblePath), fileProjection.Data)
 		if err != nil {
 			return false, err
 		}
@@ -299,7 +303,7 @@ func (w *AtomicWriter) shouldWriteFile(path string, content []byte) (bool, error
 // pathsToRemove walks the user-visible portion of the target directory and
 // determines which paths should be removed (if any) after the payload is
 // written to the target directory.
-func (w *AtomicWriter) pathsToRemove(payload map[string][]byte) (sets.String, error) {
+func (w *AtomicWriter) pathsToRemove(payload map[string]FileProjection) (sets.String, error) {
 	paths := sets.NewString()
 	visitor := func(path string, info os.FileInfo, err error) error {
 		if path == w.targetDir {
@@ -307,7 +311,11 @@ func (w *AtomicWriter) pathsToRemove(payload map[string][]byte) (sets.String, er
 		}
 
 		relativePath := strings.TrimPrefix(path, w.targetDir)
-		relativePath = strings.TrimPrefix(relativePath, "/")
+		if runtime.GOOS == "windows" {
+			relativePath = strings.TrimPrefix(relativePath, "\\")
+		} else {
+			relativePath = strings.TrimPrefix(relativePath, "/")
+		}
 		if strings.HasPrefix(relativePath, "..") {
 			return nil
 		}
@@ -350,13 +358,24 @@ func (w *AtomicWriter) newTimestampDir() (string, error) {
 		return "", err
 	}
 
+	// 0755 permissions are needed to allow 'group' and 'other' to recurse the
+	// directory tree.  do a chmod here to ensure that permissions are set correctly
+	// regardless of the process' umask.
+	err = os.Chmod(tsDir, 0755)
+	if err != nil {
+		glog.Errorf("%s: unable to set mode on new temp directory: %v", w.logContext, err)
+		return "", err
+	}
+
 	return tsDir, nil
 }
 
 // writePayloadToDir writes the given payload to the given directory.  The
 // directory must exist.
-func (w *AtomicWriter) writePayloadToDir(payload map[string][]byte, dir string) error {
-	for userVisiblePath, content := range payload {
+func (w *AtomicWriter) writePayloadToDir(payload map[string]FileProjection, dir string) error {
+	for userVisiblePath, fileProjection := range payload {
+		content := fileProjection.Data
+		mode := os.FileMode(fileProjection.Mode)
 		fullPath := path.Join(dir, userVisiblePath)
 		baseDir, _ := filepath.Split(fullPath)
 
@@ -366,10 +385,18 @@ func (w *AtomicWriter) writePayloadToDir(payload map[string][]byte, dir string) 
 			return err
 		}
 
-		err = ioutil.WriteFile(fullPath, content, 0644)
+		err = ioutil.WriteFile(fullPath, content, mode)
 		if err != nil {
-			glog.Errorf("%s: unable to write file %s: %v", w.logContext, fullPath, err)
+			glog.Errorf("%s: unable to write file %s with mode %v: %v", w.logContext, fullPath, mode, err)
 			return err
+		}
+		// Chmod is needed because ioutil.WriteFile() ends up calling
+		// open(2) to create the file, so the final mode used is "mode &
+		// ~umask". But we want to make sure the specified mode is used
+		// in the file no matter what the umask is.
+		err = os.Chmod(fullPath, mode)
+		if err != nil {
+			glog.Errorf("%s: unable to write file %s with mode %v: %v", w.logContext, fullPath, mode, err)
 		}
 	}
 
@@ -387,7 +414,7 @@ func (w *AtomicWriter) writePayloadToDir(payload map[string][]byte, dir string) 
 // foo/bar      -> ../..data/foo/bar
 // baz/bar      -> ../..data/baz/bar
 // foo/baz/blah -> ../../..data/foo/baz/blah
-func (w *AtomicWriter) createUserVisibleFiles(payload map[string][]byte) error {
+func (w *AtomicWriter) createUserVisibleFiles(payload map[string]FileProjection) error {
 	for userVisiblePath := range payload {
 		dir, _ := filepath.Split(userVisiblePath)
 		subDirs := 0
@@ -417,7 +444,6 @@ func (w *AtomicWriter) createUserVisibleFiles(payload map[string][]byte) error {
 			}
 		}
 	}
-
 	return nil
 }
 
@@ -430,31 +456,6 @@ func (w *AtomicWriter) removeUserVisiblePaths(paths sets.String) error {
 			glog.Errorf("%s: error pruning old user-visible path %s: %v", w.logContext, orderedPaths[ii], err)
 			return err
 		}
-	}
-
-	return nil
-}
-
-// touchSentinelFile touches the sentinel file or creates it if it doesn't exist.
-func (w *AtomicWriter) touchSentinelFile() error {
-	sentinelFilePath := path.Join(w.targetDir, sentinelFileName)
-	_, err := os.Stat(sentinelFilePath)
-	if err != nil && os.IsNotExist(err) {
-		file, err := os.Create(sentinelFilePath)
-		if err != nil {
-			glog.Errorf("%s: unexpected error creating sentinel file %s: %v", w.logContext, sentinelFilePath, err)
-			return err
-		}
-		file.Close()
-	} else if err != nil {
-		return err
-	}
-
-	ts := time.Now()
-	err = os.Chtimes(sentinelFilePath, ts, ts)
-	if err != nil {
-		glog.Errorf("%s: error updating sentinel file mod time: %v", w.logContext, err)
-		return err
 	}
 
 	return nil

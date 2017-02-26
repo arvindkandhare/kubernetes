@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,11 +21,11 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	"k8s.io/kubernetes/pkg/api"
+	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/kubernetes/pkg/api/v1"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/prober/results"
 	"k8s.io/kubernetes/pkg/kubelet/util/format"
-	"k8s.io/kubernetes/pkg/util/runtime"
 )
 
 // worker handles the periodic probing of its assigned container. Each worker has a go-routine
@@ -37,13 +37,13 @@ type worker struct {
 	stopCh chan struct{}
 
 	// The pod containing this probe (read-only)
-	pod *api.Pod
+	pod *v1.Pod
 
 	// The container to probe (read-only)
-	container api.Container
+	container v1.Container
 
 	// Describes the probe configuration (read-only)
-	spec *api.Probe
+	spec *v1.Probe
 
 	// The type of the worker.
 	probeType probeType
@@ -61,14 +61,17 @@ type worker struct {
 	lastResult results.Result
 	// How many times in a row the probe has returned the same result.
 	resultRun int
+
+	// If set, skip probing.
+	onHold bool
 }
 
 // Creates and starts a new probe worker.
 func newWorker(
 	m *manager,
 	probeType probeType,
-	pod *api.Pod,
-	container api.Container) *worker {
+	pod *v1.Pod,
+	container v1.Container) *worker {
 
 	w := &worker{
 		stopCh:       make(chan struct{}, 1), // Buffer so stop() can be non-blocking.
@@ -135,6 +138,7 @@ func (w *worker) stop() {
 // doProbe probes the container once and records the result.
 // Returns whether the worker should continue.
 func (w *worker) doProbe() (keepGoing bool) {
+	defer func() { recover() }() // Actually eat panics (HandleCrash takes care of logging)
 	defer runtime.HandleCrash(func(_ interface{}) { keepGoing = true })
 
 	status, ok := w.probeManager.statusManager.GetPodStatus(w.pod.UID)
@@ -145,13 +149,13 @@ func (w *worker) doProbe() (keepGoing bool) {
 	}
 
 	// Worker should terminate if pod is terminated.
-	if status.Phase == api.PodFailed || status.Phase == api.PodSucceeded {
+	if status.Phase == v1.PodFailed || status.Phase == v1.PodSucceeded {
 		glog.V(3).Infof("Pod %v %v, exiting probe worker",
 			format.Pod(w.pod), status.Phase)
 		return false
 	}
 
-	c, ok := api.GetContainerStatus(status.ContainerStatuses, w.container.Name)
+	c, ok := v1.GetContainerStatus(status.ContainerStatuses, w.container.Name)
 	if !ok || len(c.ContainerID) == 0 {
 		// Either the container has not been created yet, or it was deleted.
 		glog.V(3).Infof("Probe target container not found: %v - %v",
@@ -165,6 +169,13 @@ func (w *worker) doProbe() (keepGoing bool) {
 		}
 		w.containerID = kubecontainer.ParseContainerID(c.ContainerID)
 		w.resultsManager.Set(w.containerID, w.initialValue, w.pod)
+		// We've got a new container; resume probing.
+		w.onHold = false
+	}
+
+	if w.onHold {
+		// Worker is on hold until there is a new container.
+		return true
 	}
 
 	if c.State.Running == nil {
@@ -175,10 +186,10 @@ func (w *worker) doProbe() (keepGoing bool) {
 		}
 		// Abort if the container will not be restarted.
 		return c.State.Terminated == nil ||
-			w.pod.Spec.RestartPolicy != api.RestartPolicyNever
+			w.pod.Spec.RestartPolicy != v1.RestartPolicyNever
 	}
 
-	if int(time.Since(c.State.Running.StartedAt.Time).Seconds()) < w.spec.InitialDelaySeconds {
+	if int32(time.Since(c.State.Running.StartedAt.Time).Seconds()) < w.spec.InitialDelaySeconds {
 		return true
 	}
 
@@ -195,13 +206,21 @@ func (w *worker) doProbe() (keepGoing bool) {
 		w.resultRun = 1
 	}
 
-	if (result == results.Failure && w.resultRun < w.spec.FailureThreshold) ||
-		(result == results.Success && w.resultRun < w.spec.SuccessThreshold) {
+	if (result == results.Failure && w.resultRun < int(w.spec.FailureThreshold)) ||
+		(result == results.Success && w.resultRun < int(w.spec.SuccessThreshold)) {
 		// Success or failure is below threshold - leave the probe state unchanged.
 		return true
 	}
 
 	w.resultsManager.Set(w.containerID, result, w.pod)
+
+	if w.probeType == liveness && result == results.Failure {
+		// The container fails a liveness check, it will need to be restarted.
+		// Stop probing until we see a new container ID. This is to reduce the
+		// chance of hitting #21751, where running `docker exec` when a
+		// container is being stopped may lead to corrupted container state.
+		w.onHold = true
+	}
 
 	return true
 }

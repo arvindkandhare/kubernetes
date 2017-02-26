@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,14 +14,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// CAUTION: If you update code in this file, you may need to also update code
-//          in contrib/mesos/cmd/km/server.go
 package main
 
 import (
 	"io/ioutil"
 	"strings"
 
+	"k8s.io/apiserver/pkg/util/flag"
 	"k8s.io/kubernetes/pkg/util"
 
 	"github.com/spf13/pflag"
@@ -31,9 +30,10 @@ type serverRunFunc func(s *Server, args []string) error
 
 // Server describes a server that this binary can morph into.
 type Server struct {
-	SimpleUsage string        // One line description of the server.
-	Long        string        // Longer free form description of the server
-	Run         serverRunFunc // Run the server.  This is not expected to return.
+	SimpleUsage     string        // One line description of the server.
+	Long            string        // Longer free form description of the server
+	Run             serverRunFunc // Run the server.  This is not expected to return.
+	AlternativeName string
 
 	flags *pflag.FlagSet // Flags for the command (and all dependents)
 	name  string
@@ -70,7 +70,7 @@ func (s *Server) Flags() *pflag.FlagSet {
 	if s.flags == nil {
 		s.flags = pflag.NewFlagSet(s.Name(), pflag.ContinueOnError)
 		s.flags.SetOutput(ioutil.Discard)
-		s.flags.SetNormalizeFunc(util.WordSepNormalizeFunc)
+		s.flags.SetNormalizeFunc(flag.WordSepNormalizeFunc)
 	}
 	return s.flags
 }

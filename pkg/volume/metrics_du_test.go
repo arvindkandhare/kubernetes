@@ -1,7 +1,7 @@
 // +build linux
 
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package volume
+package volume_test
 
 import (
 	"io/ioutil"
@@ -24,7 +24,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	utiltesting "k8s.io/kubernetes/pkg/util/testing"
+	utiltesting "k8s.io/client-go/util/testing"
+	. "k8s.io/kubernetes/pkg/volume"
+	volumetest "k8s.io/kubernetes/pkg/volume/testing"
 )
 
 const expectedBlockSize = 4096
@@ -39,7 +41,7 @@ func TestMetricsDuGetCapacity(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 	metrics := NewMetricsDu(tmpDir)
 
-	expectedEmptyDirUsage, err := FindEmptyDirectoryUsageOnTmpfs()
+	expectedEmptyDirUsage, err := volumetest.FindEmptyDirectoryUsageOnTmpfs()
 	if err != nil {
 		t.Errorf("Unexpected error finding expected empty directory usage on tmpfs: %v", err)
 	}
@@ -75,7 +77,7 @@ func TestMetricsDuGetCapacity(t *testing.T) {
 // TestMetricsDuRequireInit tests that if MetricsDu is not initialized with a path, GetMetrics
 // returns an error
 func TestMetricsDuRequirePath(t *testing.T) {
-	metrics := &metricsDu{}
+	metrics := NewMetricsDu("")
 	actual, err := metrics.GetMetrics()
 	expected := &Metrics{}
 	if *actual != *expected {

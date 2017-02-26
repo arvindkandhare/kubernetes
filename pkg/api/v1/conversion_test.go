@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,105 @@ limitations under the License.
 package v1_test
 
 import (
+	"net/url"
+	"reflect"
 	"testing"
+	"time"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/resource"
-	versioned "k8s.io/kubernetes/pkg/api/v1"
+	"k8s.io/kubernetes/pkg/api/v1"
 )
+
+func TestPodLogOptions(t *testing.T) {
+	sinceSeconds := int64(1)
+	sinceTime := metav1.NewTime(time.Date(2000, 1, 1, 12, 34, 56, 0, time.UTC).Local())
+	tailLines := int64(2)
+	limitBytes := int64(3)
+
+	versionedLogOptions := &v1.PodLogOptions{
+		Container:    "mycontainer",
+		Follow:       true,
+		Previous:     true,
+		SinceSeconds: &sinceSeconds,
+		SinceTime:    &sinceTime,
+		Timestamps:   true,
+		TailLines:    &tailLines,
+		LimitBytes:   &limitBytes,
+	}
+	unversionedLogOptions := &api.PodLogOptions{
+		Container:    "mycontainer",
+		Follow:       true,
+		Previous:     true,
+		SinceSeconds: &sinceSeconds,
+		SinceTime:    &sinceTime,
+		Timestamps:   true,
+		TailLines:    &tailLines,
+		LimitBytes:   &limitBytes,
+	}
+	expectedParameters := url.Values{
+		"container":    {"mycontainer"},
+		"follow":       {"true"},
+		"previous":     {"true"},
+		"sinceSeconds": {"1"},
+		"sinceTime":    {"2000-01-01T12:34:56Z"},
+		"timestamps":   {"true"},
+		"tailLines":    {"2"},
+		"limitBytes":   {"3"},
+	}
+
+	codec := runtime.NewParameterCodec(api.Scheme)
+
+	// unversioned -> query params
+	{
+		actualParameters, err := codec.EncodeParameters(unversionedLogOptions, v1.SchemeGroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(actualParameters, expectedParameters) {
+			t.Fatalf("Expected\n%#v\ngot\n%#v", expectedParameters, actualParameters)
+		}
+	}
+
+	// versioned -> query params
+	{
+		actualParameters, err := codec.EncodeParameters(versionedLogOptions, v1.SchemeGroupVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(actualParameters, expectedParameters) {
+			t.Fatalf("Expected\n%#v\ngot\n%#v", expectedParameters, actualParameters)
+		}
+	}
+
+	// query params -> versioned
+	{
+		convertedLogOptions := &v1.PodLogOptions{}
+		err := codec.DecodeParameters(expectedParameters, v1.SchemeGroupVersion, convertedLogOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(convertedLogOptions, versionedLogOptions) {
+			t.Fatalf("Unexpected deserialization:\n%s", diff.ObjectGoPrintSideBySide(versionedLogOptions, convertedLogOptions))
+		}
+	}
+
+	// query params -> unversioned
+	{
+		convertedLogOptions := &api.PodLogOptions{}
+		err := codec.DecodeParameters(expectedParameters, v1.SchemeGroupVersion, convertedLogOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(convertedLogOptions, unversionedLogOptions) {
+			t.Fatalf("Unexpected deserialization:\n%s", diff.ObjectGoPrintSideBySide(unversionedLogOptions, convertedLogOptions))
+		}
+	}
+}
 
 // TestPodSpecConversion tests that ServiceAccount is an alias for
 // ServiceAccountName.
@@ -34,8 +127,8 @@ func TestPodSpecConversion(t *testing.T) {
 	i := &api.PodSpec{
 		ServiceAccountName: name,
 	}
-	v := versioned.PodSpec{}
-	if err := api.Scheme.Convert(i, &v); err != nil {
+	v := v1.PodSpec{}
+	if err := api.Scheme.Convert(i, &v, nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if v.ServiceAccountName != name {
@@ -48,7 +141,7 @@ func TestPodSpecConversion(t *testing.T) {
 	// Test v1 -> internal. Either DeprecatedServiceAccount, ServiceAccountName,
 	// or both should translate to ServiceAccountName. ServiceAccountName wins
 	// if both are set.
-	testCases := []*versioned.PodSpec{
+	testCases := []*v1.PodSpec{
 		// New
 		{ServiceAccountName: name},
 		// Alias
@@ -60,7 +153,7 @@ func TestPodSpecConversion(t *testing.T) {
 	}
 	for k, v := range testCases {
 		got := api.PodSpec{}
-		err := api.Scheme.Convert(v, &got)
+		err := api.Scheme.Convert(v, &got, nil)
 		if err != nil {
 			t.Fatalf("unexpected error for case %d: %v", k, err)
 		}
@@ -75,14 +168,14 @@ func TestResourceListConversion(t *testing.T) {
 	bigMilliQuantity.Add(resource.MustParse("12345m"))
 
 	tests := []struct {
-		input    versioned.ResourceList
+		input    v1.ResourceList
 		expected api.ResourceList
 	}{
 		{ // No changes necessary.
-			input: versioned.ResourceList{
-				versioned.ResourceMemory:  resource.MustParse("30M"),
-				versioned.ResourceCPU:     resource.MustParse("100m"),
-				versioned.ResourceStorage: resource.MustParse("1G"),
+			input: v1.ResourceList{
+				v1.ResourceMemory:  resource.MustParse("30M"),
+				v1.ResourceCPU:     resource.MustParse("100m"),
+				v1.ResourceStorage: resource.MustParse("1G"),
 			},
 			expected: api.ResourceList{
 				api.ResourceMemory:  resource.MustParse("30M"),
@@ -91,9 +184,9 @@ func TestResourceListConversion(t *testing.T) {
 			},
 		},
 		{ // Nano-scale values should be rounded up to milli-scale.
-			input: versioned.ResourceList{
-				versioned.ResourceCPU:    resource.MustParse("3.000023m"),
-				versioned.ResourceMemory: resource.MustParse("500.000050m"),
+			input: v1.ResourceList{
+				v1.ResourceCPU:    resource.MustParse("3.000023m"),
+				v1.ResourceMemory: resource.MustParse("500.000050m"),
 			},
 			expected: api.ResourceList{
 				api.ResourceCPU:    resource.MustParse("4m"),
@@ -101,9 +194,9 @@ func TestResourceListConversion(t *testing.T) {
 			},
 		},
 		{ // Large values should still be accurate.
-			input: versioned.ResourceList{
-				versioned.ResourceCPU:     *bigMilliQuantity.Copy(),
-				versioned.ResourceStorage: *bigMilliQuantity.Copy(),
+			input: v1.ResourceList{
+				v1.ResourceCPU:     *bigMilliQuantity.Copy(),
+				v1.ResourceStorage: *bigMilliQuantity.Copy(),
 			},
 			expected: api.ResourceList{
 				api.ResourceCPU:     *bigMilliQuantity.Copy(),
@@ -112,13 +205,13 @@ func TestResourceListConversion(t *testing.T) {
 		},
 	}
 
-	output := api.ResourceList{}
 	for i, test := range tests {
-		err := api.Scheme.Convert(&test.input, &output)
+		output := api.ResourceList{}
+		err := api.Scheme.Convert(&test.input, &output, nil)
 		if err != nil {
 			t.Fatalf("unexpected error for case %d: %v", i, err)
 		}
-		if !api.Semantic.DeepEqual(test.expected, output) {
+		if !apiequality.Semantic.DeepEqual(test.expected, output) {
 			t.Errorf("unexpected conversion for case %d: Expected %+v; Got %+v", i, test.expected, output)
 		}
 	}

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2014 The Kubernetes Authors All rights reserved.
+# Copyright 2014 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,15 +21,16 @@ set -o nounset
 set -o pipefail
 
 KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
-
-GO_VERSION=($(go version))
-
-if [[ -z $(echo "${GO_VERSION[2]}" | grep -E 'go1.4|go1.5') ]]; then
-  echo "Unsupported go version '${GO_VERSION}', skipping gofmt."
-  exit 0
-fi
+source "${KUBE_ROOT}/hack/lib/init.sh"
 
 cd "${KUBE_ROOT}"
+
+# Prefer bazel's gofmt.
+gofmt="external/io_bazel_rules_go_toolchain/bin/gofmt"
+if [[ ! -x "${gofmt}" ]]; then
+  gofmt=$(which gofmt)
+  kube::golang::verify_go_version
+fi
 
 find_files() {
   find . -not \( \
@@ -40,15 +41,15 @@ find_files() {
         -o -wholename './release' \
         -o -wholename './target' \
         -o -wholename '*/third_party/*' \
-        -o -wholename '*/Godeps/*' \
+        -o -wholename '*/vendor/*' \
+        -o -wholename './staging/src/k8s.io/client-go/*vendor/*' \
+        -o -wholename '*/bindata.go' \
       \) -prune \
     \) -name '*.go'
 }
 
-GOFMT="gofmt -s"
-bad_files=$(find_files | xargs $GOFMT -l)
-if [[ -n "${bad_files}" ]]; then
-  echo "!!! '$GOFMT' needs to be run on the following files: "
-  echo "${bad_files}"
+diff=$(find_files | xargs ${gofmt} -d -s 2>&1)
+if [[ -n "${diff}" ]]; then
+  echo "${diff}"
   exit 1
 fi

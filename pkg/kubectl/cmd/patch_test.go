@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,20 +21,23 @@ import (
 	"net/http"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/client/unversioned/fake"
+	"k8s.io/client-go/rest/fake"
+	"k8s.io/kubernetes/pkg/api"
+	cmdtesting "k8s.io/kubernetes/pkg/kubectl/cmd/testing"
 )
 
 func TestPatchObject(t *testing.T) {
 	_, svc, _ := testData()
 
-	f, tf, codec := NewAPIFactory()
+	f, tf, codec, _ := cmdtesting.NewAPIFactory()
 	tf.Printer = &testPrinter{}
-	tf.Client = &fake.RESTClient{
-		Codec: codec,
+	tf.UnstructuredClient = &fake.RESTClient{
+		APIRegistry:          api.Registry,
+		NegotiatedSerializer: unstructuredSerializer,
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/services/frontend" && (m == "PATCH" || m == "GET"):
-				return &http.Response{StatusCode: 200, Body: objBody(codec, &svc.Items[0])}, nil
+				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, &svc.Items[0])}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 				return nil, nil
@@ -51,7 +54,7 @@ func TestPatchObject(t *testing.T) {
 	cmd.Run(cmd, []string{"services/frontend"})
 
 	// uses the name from the file, not the response
-	if buf.String() != "frontend\n" {
+	if buf.String() != "service/frontend\n" {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 }
@@ -59,14 +62,15 @@ func TestPatchObject(t *testing.T) {
 func TestPatchObjectFromFile(t *testing.T) {
 	_, svc, _ := testData()
 
-	f, tf, codec := NewAPIFactory()
+	f, tf, codec, _ := cmdtesting.NewAPIFactory()
 	tf.Printer = &testPrinter{}
-	tf.Client = &fake.RESTClient{
-		Codec: codec,
+	tf.UnstructuredClient = &fake.RESTClient{
+		APIRegistry:          api.Registry,
+		NegotiatedSerializer: unstructuredSerializer,
 		Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 			switch p, m := req.URL.Path, req.Method; {
 			case p == "/namespaces/test/services/frontend" && (m == "PATCH" || m == "GET"):
-				return &http.Response{StatusCode: 200, Body: objBody(codec, &svc.Items[0])}, nil
+				return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, &svc.Items[0])}, nil
 			default:
 				t.Fatalf("unexpected request: %#v\n%#v", req.URL, req)
 				return nil, nil
@@ -84,7 +88,7 @@ func TestPatchObjectFromFile(t *testing.T) {
 	cmd.Run(cmd, []string{})
 
 	// uses the name from the file, not the response
-	if buf.String() != "frontend\n" {
+	if buf.String() != "service/frontend\n" {
 		t.Errorf("unexpected output: %s", buf.String())
 	}
 }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import (
 func NewKubelet() *Server {
 	s := options.NewKubeletServer()
 	hks := Server{
+		name:        "kubelet",
 		SimpleUsage: "kubelet",
 		Long: `The kubelet binary is responsible for maintaining a set of containers on a
 		particular node. It syncs data from a variety of sources including a

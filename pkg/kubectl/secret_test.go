@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"reflect"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubernetes/pkg/api"
 )
 
@@ -34,7 +35,7 @@ func TestSecretGenerate(t *testing.T) {
 				"name": "foo",
 			},
 			expected: &api.Secret{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo",
 				},
 				Data: map[string][]byte{},
@@ -47,7 +48,7 @@ func TestSecretGenerate(t *testing.T) {
 				"type": "my-type",
 			},
 			expected: &api.Secret{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo",
 				},
 				Data: map[string][]byte{},
@@ -61,7 +62,7 @@ func TestSecretGenerate(t *testing.T) {
 				"from-literal": []string{"key1=value1", "key2=value2"},
 			},
 			expected: &api.Secret{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo",
 				},
 				Data: map[string][]byte{
@@ -91,6 +92,21 @@ func TestSecretGenerate(t *testing.T) {
 				"from-file": []string{"key1==value"},
 			},
 			expectErr: true,
+		},
+		{
+			params: map[string]interface{}{
+				"name":         "foo",
+				"from-literal": []string{"key1==value1"},
+			},
+			expected: &api.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo",
+				},
+				Data: map[string][]byte{
+					"key1": []byte("=value1"),
+				},
+			},
+			expectErr: false,
 		},
 	}
 	generator := SecretGeneratorV1{}

@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -109,7 +109,7 @@ func TestSafeFormatAndMount(t *testing.T) {
 			execScripts: []ExecArgs{
 				{"fsck", []string{"-a", "/dev/foo"}, "", nil},
 				{"lsblk", []string{"-nd", "-o", "FSTYPE", "/dev/foo"}, "", nil},
-				{"mkfs.ext4", []string{"-E", "lazy_itable_init=0,lazy_journal_init=0", "-F", "/dev/foo"}, "", fmt.Errorf("formatting failed")},
+				{"mkfs.ext4", []string{"-F", "/dev/foo"}, "", fmt.Errorf("formatting failed")},
 			},
 			expectedError: fmt.Errorf("formatting failed"),
 		},
@@ -120,7 +120,7 @@ func TestSafeFormatAndMount(t *testing.T) {
 			execScripts: []ExecArgs{
 				{"fsck", []string{"-a", "/dev/foo"}, "", nil},
 				{"lsblk", []string{"-nd", "-o", "FSTYPE", "/dev/foo"}, "", nil},
-				{"mkfs.ext4", []string{"-E", "lazy_itable_init=0,lazy_journal_init=0", "-F", "/dev/foo"}, "", nil},
+				{"mkfs.ext4", []string{"-F", "/dev/foo"}, "", nil},
 			},
 			expectedError: fmt.Errorf("Still cannot mount"),
 		},
@@ -131,7 +131,7 @@ func TestSafeFormatAndMount(t *testing.T) {
 			execScripts: []ExecArgs{
 				{"fsck", []string{"-a", "/dev/foo"}, "", nil},
 				{"lsblk", []string{"-nd", "-o", "FSTYPE", "/dev/foo"}, "", nil},
-				{"mkfs.ext4", []string{"-E", "lazy_itable_init=0,lazy_journal_init=0", "-F", "/dev/foo"}, "", nil},
+				{"mkfs.ext4", []string{"-F", "/dev/foo"}, "", nil},
 			},
 			expectedError: nil,
 		},
@@ -142,7 +142,7 @@ func TestSafeFormatAndMount(t *testing.T) {
 			execScripts: []ExecArgs{
 				{"fsck", []string{"-a", "/dev/foo"}, "", nil},
 				{"lsblk", []string{"-nd", "-o", "FSTYPE", "/dev/foo"}, "", nil},
-				{"mkfs.ext3", []string{"-E", "lazy_itable_init=0,lazy_journal_init=0", "-F", "/dev/foo"}, "", nil},
+				{"mkfs.ext3", []string{"-F", "/dev/foo"}, "", nil},
 			},
 			expectedError: nil,
 		},

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,12 +18,15 @@ package dockertools
 
 import (
 	cadvisorapi "github.com/google/cadvisor/info/v1"
-	"k8s.io/kubernetes/pkg/client/record"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/flowcontrol"
+	"k8s.io/kubernetes/pkg/api/v1"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/network"
 	proberesults "k8s.io/kubernetes/pkg/kubelet/prober/results"
 	kubetypes "k8s.io/kubernetes/pkg/kubelet/types"
-	"k8s.io/kubernetes/pkg/util"
+	"k8s.io/kubernetes/pkg/kubelet/util/cache"
 	"k8s.io/kubernetes/pkg/util/oom"
 	"k8s.io/kubernetes/pkg/util/procfs"
 )
@@ -41,13 +44,35 @@ func NewFakeDockerManager(
 	osInterface kubecontainer.OSInterface,
 	networkPlugin network.NetworkPlugin,
 	runtimeHelper kubecontainer.RuntimeHelper,
-	httpClient kubetypes.HttpGetter, imageBackOff *util.Backoff) *DockerManager {
+	httpClient kubetypes.HttpGetter, imageBackOff *flowcontrol.Backoff) *DockerManager {
 
 	fakeOOMAdjuster := oom.NewFakeOOMAdjuster()
 	fakeProcFs := procfs.NewFakeProcFS()
-	dm := NewDockerManager(client, recorder, livenessManager, containerRefManager, machineInfo, podInfraContainerImage, qps,
+	fakePodGetter := &fakePodGetter{}
+	dm := NewDockerManager(client, recorder, livenessManager, containerRefManager, fakePodGetter, machineInfo, podInfraContainerImage, qps,
 		burst, containerLogsDir, osInterface, networkPlugin, runtimeHelper, httpClient, &NativeExecHandler{},
-		fakeOOMAdjuster, fakeProcFs, false, imageBackOff, true, false, true)
+		fakeOOMAdjuster, fakeProcFs, false, imageBackOff, false, false, true, "/var/lib/kubelet/seccomp")
 	dm.dockerPuller = &FakeDockerPuller{}
+
+	// ttl of version cache is set to 0 so we always call version api directly in tests.
+	dm.versionCache = cache.NewObjectCache(
+		func() (interface{}, error) {
+			return dm.getVersionInfo()
+		},
+		0,
+	)
 	return dm
+}
+
+type fakePodGetter struct {
+	pods map[types.UID]*v1.Pod
+}
+
+func newFakePodGetter() *fakePodGetter {
+	return &fakePodGetter{make(map[types.UID]*v1.Pod)}
+}
+
+func (f *fakePodGetter) GetPodByUID(uid types.UID) (*v1.Pod, bool) {
+	pod, found := f.pods[uid]
+	return pod, found
 }

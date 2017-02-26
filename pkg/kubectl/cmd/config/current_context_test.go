@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/client/unversioned/clientcmd"
-	clientcmdapi "k8s.io/kubernetes/pkg/client/unversioned/clientcmd/api"
+	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
 type currentContextTest struct {
@@ -64,7 +64,7 @@ func (test currentContextTest) run(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	pathOptions := NewDefaultPathOptions()
+	pathOptions := clientcmd.NewDefaultPathOptions()
 	pathOptions.GlobalFile = fakeKubeFile.Name()
 	pathOptions.EnvVar = ""
 	options := CurrentContextOptions{

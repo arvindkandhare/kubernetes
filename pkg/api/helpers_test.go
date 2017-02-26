@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,10 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"k8s.io/kubernetes/pkg/api/resource"
-	"k8s.io/kubernetes/pkg/labels"
-
-	"speter.net/go/exp/math/dec/inf"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 func TestConversionError(t *testing.T) {
@@ -56,8 +54,8 @@ func TestSemantic(t *testing.T) {
 		{resource.Quantity{}, resource.MustParse("0"), true},
 		{resource.Quantity{}, resource.MustParse("1m"), false},
 		{
-			resource.Quantity{Amount: inf.NewDec(5, 0), Format: resource.BinarySI},
-			resource.Quantity{Amount: inf.NewDec(5, 0), Format: resource.DecimalSI},
+			resource.NewQuantity(5, resource.BinarySI),
+			resource.NewQuantity(5, resource.DecimalSI),
 			true,
 		},
 		{resource.MustParse("2m"), resource.MustParse("1m"), false},
@@ -214,17 +212,17 @@ func TestNodeSelectorRequirementsAsSelector(t *testing.T) {
 			in: []NodeSelectorRequirement{{
 				Key:      "foo",
 				Operator: NodeSelectorOpGt,
-				Values:   []string{"1.1"},
+				Values:   []string{"1"},
 			}},
-			out: mustParse("foo>1.1"),
+			out: mustParse("foo>1"),
 		},
 		{
 			in: []NodeSelectorRequirement{{
 				Key:      "bar",
 				Operator: NodeSelectorOpLt,
-				Values:   []string{"7.1"},
+				Values:   []string{"7"},
 			}},
-			out: mustParse("bar<7.1"),
+			out: mustParse("bar<7"),
 		},
 	}
 
@@ -242,58 +240,150 @@ func TestNodeSelectorRequirementsAsSelector(t *testing.T) {
 	}
 }
 
-func TestGetAffinityFromPod(t *testing.T) {
+func TestTaintToString(t *testing.T) {
 	testCases := []struct {
-		pod       *Pod
-		expectErr bool
+		taint          *Taint
+		expectedString string
 	}{
 		{
-			pod:       &Pod{},
-			expectErr: false,
+			taint: &Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			expectedString: "foo=bar:NoSchedule",
 		},
 		{
-			pod: &Pod{
-				ObjectMeta: ObjectMeta{
-					Annotations: map[string]string{
-						AffinityAnnotationKey: `
-						{"nodeAffinity": { "requiredDuringSchedulingIgnoredDuringExecution": {
-							"nodeSelectorTerms": [{
-								"matchExpressions": [{
-									"key": "foo",
-									"operator": "In",
-									"values": ["value1", "value2"]
-								}]
-							}]
-						}}}`,
-					},
-				},
+			taint: &Taint{
+				Key:    "foo",
+				Effect: TaintEffectNoSchedule,
 			},
-			expectErr: false,
-		},
-		{
-			pod: &Pod{
-				ObjectMeta: ObjectMeta{
-					Annotations: map[string]string{
-						AffinityAnnotationKey: `
-						{"nodeAffinity": { "requiredDuringSchedulingIgnoredDuringExecution": {
-							"nodeSelectorTerms": [{
-								"matchExpressions": [{
-									"key": "foo",
-						`,
-					},
-				},
-			},
-			expectErr: true,
+			expectedString: "foo:NoSchedule",
 		},
 	}
 
 	for i, tc := range testCases {
-		_, err := GetAffinityFromPodAnnotations(tc.pod.Annotations)
-		if err == nil && tc.expectErr {
-			t.Errorf("[%v]expected error but got none.", i)
+		if tc.expectedString != tc.taint.ToString() {
+			t.Errorf("[%v] expected taint %v converted to %s, got %s", i, tc.taint, tc.expectedString, tc.taint.ToString())
 		}
-		if err != nil && !tc.expectErr {
+	}
+}
+
+func TestMatchTaint(t *testing.T) {
+	testCases := []struct {
+		description  string
+		taint        *Taint
+		taintToMatch Taint
+		expectMatch  bool
+	}{
+		{
+			description: "two taints with the same key,value,effect should match",
+			taint: &Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			taintToMatch: Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			expectMatch: true,
+		},
+		{
+			description: "two taints with the same key,effect but different value should match",
+			taint: &Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			taintToMatch: Taint{
+				Key:    "foo",
+				Value:  "different-value",
+				Effect: TaintEffectNoSchedule,
+			},
+			expectMatch: true,
+		},
+		{
+			description: "two taints with the different key cannot match",
+			taint: &Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			taintToMatch: Taint{
+				Key:    "different-key",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			expectMatch: false,
+		},
+		{
+			description: "two taints with the different effect cannot match",
+			taint: &Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectNoSchedule,
+			},
+			taintToMatch: Taint{
+				Key:    "foo",
+				Value:  "bar",
+				Effect: TaintEffectPreferNoSchedule,
+			},
+			expectMatch: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		if tc.expectMatch != tc.taint.MatchTaint(tc.taintToMatch) {
+			t.Errorf("[%s] expect taint %s match taint %s", tc.description, tc.taint.ToString(), tc.taintToMatch.ToString())
+		}
+	}
+}
+
+func TestSysctlsFromPodAnnotation(t *testing.T) {
+	type Test struct {
+		annotation  string
+		expectValue []Sysctl
+		expectErr   bool
+	}
+	for i, test := range []Test{
+		{
+			annotation:  "",
+			expectValue: nil,
+		},
+		{
+			annotation: "foo.bar",
+			expectErr:  true,
+		},
+		{
+			annotation: "=123",
+			expectErr:  true,
+		},
+		{
+			annotation:  "foo.bar=",
+			expectValue: []Sysctl{{Name: "foo.bar", Value: ""}},
+		},
+		{
+			annotation:  "foo.bar=42",
+			expectValue: []Sysctl{{Name: "foo.bar", Value: "42"}},
+		},
+		{
+			annotation: "foo.bar=42,",
+			expectErr:  true,
+		},
+		{
+			annotation:  "foo.bar=42,abc.def=1",
+			expectValue: []Sysctl{{Name: "foo.bar", Value: "42"}, {Name: "abc.def", Value: "1"}},
+		},
+	} {
+		sysctls, err := SysctlsFromPodAnnotation(test.annotation)
+		if test.expectErr && err == nil {
+			t.Errorf("[%v]expected error but got none", i)
+		} else if !test.expectErr && err != nil {
 			t.Errorf("[%v]did not expect error but got: %v", i, err)
+		} else if !reflect.DeepEqual(sysctls, test.expectValue) {
+			t.Errorf("[%v]expect value %v but got %v", i, test.expectValue, sysctls)
 		}
 	}
 }

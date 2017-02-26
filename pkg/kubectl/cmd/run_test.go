@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,16 +23,20 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/rest/fake"
 	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/api/testapi"
-	client "k8s.io/kubernetes/pkg/client/unversioned"
-	"k8s.io/kubernetes/pkg/client/unversioned/fake"
+	cmdtesting "k8s.io/kubernetes/pkg/kubectl/cmd/testing"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
-	"k8s.io/kubernetes/pkg/runtime"
-	"k8s.io/kubernetes/pkg/util/intstr"
 )
 
 func TestGetRestartPolicy(t *testing.T) {
@@ -149,15 +153,16 @@ func TestRunArgsFollowDashRules(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		f, tf, codec := NewAPIFactory()
+		f, tf, codec, ns := cmdtesting.NewAPIFactory()
 		tf.Client = &fake.RESTClient{
-			Codec: codec,
+			APIRegistry:          api.Registry,
+			NegotiatedSerializer: ns,
 			Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
-				return &http.Response{StatusCode: 201, Body: objBody(codec, &rc.Items[0])}, nil
+				return &http.Response{StatusCode: 201, Header: defaultHeader(), Body: objBody(codec, &rc.Items[0])}, nil
 			}),
 		}
 		tf.Namespace = "test"
-		tf.ClientConfig = &client.Config{}
+		tf.ClientConfig = &restclient.Config{}
 		cmd := NewCmdRun(f, os.Stdin, os.Stdout, os.Stderr)
 		cmd.Flags().Set("image", "nginx")
 		cmd.Flags().Set("generator", "run/v1")
@@ -193,7 +198,7 @@ func TestGenerateService(t *testing.T) {
 			expectErr: false,
 			name:      "basic",
 			service: api.Service{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name: "foo",
 				},
 				Spec: api.ServiceSpec{
@@ -224,7 +229,7 @@ func TestGenerateService(t *testing.T) {
 			expectErr: false,
 			name:      "custom labels",
 			service: api.Service{
-				ObjectMeta: api.ObjectMeta{
+				ObjectMeta: metav1.ObjectMeta{
 					Name:   "foo",
 					Labels: map[string]string{"app": "bar"},
 				},
@@ -264,10 +269,12 @@ func TestGenerateService(t *testing.T) {
 	}
 	for _, test := range tests {
 		sawPOST := false
-		f, tf, codec := NewAPIFactory()
-		tf.ClientConfig = &client.Config{ContentConfig: client.ContentConfig{GroupVersion: testapi.Default.GroupVersion()}}
+		f, tf, codec, ns := cmdtesting.NewAPIFactory()
+		tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: &api.Registry.GroupOrDie(api.GroupName).GroupVersion}}
+		tf.Printer = &testPrinter{}
 		tf.Client = &fake.RESTClient{
-			Codec: codec,
+			APIRegistry:          api.Registry,
+			NegotiatedSerializer: ns,
 			Client: fake.CreateHTTPClient(func(req *http.Request) (*http.Response, error) {
 				switch p, m := req.URL.Path, req.Method; {
 				case test.expectPOST && m == "POST" && p == "/namespaces/namespace/services":
@@ -290,7 +297,7 @@ func TestGenerateService(t *testing.T) {
 					if !reflect.DeepEqual(&test.service, svc) {
 						t.Errorf("expected:\n%v\nsaw:\n%v\n", &test.service, svc)
 					}
-					return &http.Response{StatusCode: 200, Body: body}, nil
+					return &http.Response{StatusCode: 200, Header: defaultHeader(), Body: body}, nil
 				default:
 					// Ensures no GET is performed when deleting by name
 					t.Errorf("%s: unexpected request: %s %#v\n%#v", test.name, req.Method, req.URL, req)
@@ -299,9 +306,10 @@ func TestGenerateService(t *testing.T) {
 			}),
 		}
 		cmd := &cobra.Command{}
-		cmd.Flags().String("output", "", "")
 		cmd.Flags().Bool(cmdutil.ApplyAnnotationsFlag, false, "")
-		cmd.Flags().Bool("record", false, "Record current kubectl command in the resource annotation.")
+		cmd.Flags().Bool("record", false, "Record current kubectl command in the resource annotation. If set to false, do not record the command. If set to true, record the command. If not set, default to updating the existing annotation value only if one already exists.")
+		cmdutil.AddPrinterFlags(cmd)
+		cmdutil.AddInclude3rdPartyFlags(cmd)
 		addRunFlags(cmd)
 
 		if !test.expectPOST {
@@ -325,7 +333,102 @@ func TestGenerateService(t *testing.T) {
 			t.Errorf("unexpected error: %v", err)
 		}
 		if test.expectPOST != sawPOST {
-			t.Error("expectPost: %v, sawPost: %v", test.expectPOST, sawPOST)
+			t.Errorf("expectPost: %v, sawPost: %v", test.expectPOST, sawPOST)
 		}
 	}
+}
+
+func TestRunValidations(t *testing.T) {
+	tests := []struct {
+		args        []string
+		flags       map[string]string
+		expectedErr string
+	}{
+		{
+			expectedErr: "NAME is required",
+		},
+		{
+			args:        []string{"test"},
+			expectedErr: "Invalid image name",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image":    "busybox",
+				"stdin":    "true",
+				"replicas": "2",
+			},
+			expectedErr: "stdin requires that replicas is 1",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image": "busybox",
+				"rm":    "true",
+			},
+			expectedErr: "rm should only be used for attached containers",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image":   "busybox",
+				"attach":  "true",
+				"dry-run": "true",
+			},
+			expectedErr: "can't be used with attached containers options",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image":   "busybox",
+				"stdin":   "true",
+				"dry-run": "true",
+			},
+			expectedErr: "can't be used with attached containers options",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image":   "busybox",
+				"tty":     "true",
+				"stdin":   "true",
+				"dry-run": "true",
+			},
+			expectedErr: "can't be used with attached containers options",
+		},
+		{
+			args: []string{"test"},
+			flags: map[string]string{
+				"image": "busybox",
+				"tty":   "true",
+			},
+			expectedErr: "stdin is required for containers with -t/--tty",
+		},
+	}
+	for _, test := range tests {
+		f, tf, codec, ns := cmdtesting.NewTestFactory()
+		tf.Printer = &testPrinter{}
+		tf.Client = &fake.RESTClient{
+			APIRegistry:          api.Registry,
+			NegotiatedSerializer: ns,
+			Resp:                 &http.Response{StatusCode: 200, Header: defaultHeader(), Body: objBody(codec, cmdtesting.NewInternalType("", "", ""))},
+		}
+		tf.Namespace = "test"
+		tf.ClientConfig = &restclient.Config{ContentConfig: restclient.ContentConfig{GroupVersion: &schema.GroupVersion{Version: "v1"}}}
+		inBuf := bytes.NewReader([]byte{})
+		outBuf := bytes.NewBuffer([]byte{})
+		errBuf := bytes.NewBuffer([]byte{})
+
+		cmd := NewCmdRun(f, inBuf, outBuf, errBuf)
+		for flagName, flagValue := range test.flags {
+			cmd.Flags().Set(flagName, flagValue)
+		}
+		err := Run(f, inBuf, outBuf, errBuf, cmd, test.args, cmd.ArgsLenAtDash())
+		if err != nil && len(test.expectedErr) > 0 {
+			if !strings.Contains(err.Error(), test.expectedErr) {
+				t.Errorf("unexpected error: %v", err)
+			}
+		}
+	}
+
 }

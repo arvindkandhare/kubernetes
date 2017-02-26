@@ -1,5 +1,5 @@
 /*
-Copyright 2014 The Kubernetes Authors All rights reserved.
+Copyright 2014 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@ import (
 	"fmt"
 	"reflect"
 
-	"k8s.io/kubernetes/pkg/api/meta"
-	"k8s.io/kubernetes/pkg/runtime"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // DisabledClientForMapping allows callers to avoid allowing remote calls when handling
@@ -52,6 +53,8 @@ func (m *Mapper) InfoForData(data []byte, source string) (*Info, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode %q: %v", source, err)
 	}
+
+	obj, versioned := versions.Last(), versions.First()
 	mapping, err := m.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		return nil, fmt.Errorf("unable to recognize %q: %v", source, err)
@@ -62,10 +65,6 @@ func (m *Mapper) InfoForData(data []byte, source string) (*Info, error) {
 		return nil, fmt.Errorf("unable to connect to a server to handle %q: %v", mapping.Resource, err)
 	}
 
-	// TODO: decoding the version object is convenient, but questionable. This is used by apply
-	// and rolling-update today, but both of those cases should probably be requesting the raw
-	// object and performing their own decoding.
-	obj, versioned := versions.Last(), versions.First()
 	name, _ := mapping.MetadataAccessor.Name(obj)
 	namespace, _ := mapping.MetadataAccessor.Namespace(obj)
 	resourceVersion, _ := mapping.MetadataAccessor.ResourceVersion(obj)
@@ -85,11 +84,17 @@ func (m *Mapper) InfoForData(data []byte, source string) (*Info, error) {
 // InfoForObject creates an Info object for the given Object. An error is returned
 // if the object cannot be introspected. Name and namespace will be set into Info
 // if the mapping's MetadataAccessor can retrieve them.
-func (m *Mapper) InfoForObject(obj runtime.Object) (*Info, error) {
-	groupVersionKind, err := m.ObjectKind(obj)
+func (m *Mapper) InfoForObject(obj runtime.Object, preferredGVKs []schema.GroupVersionKind) (*Info, error) {
+	groupVersionKinds, _, err := m.ObjectKinds(obj)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get type info from the object %q: %v", reflect.TypeOf(obj), err)
 	}
+
+	groupVersionKind := groupVersionKinds[0]
+	if len(groupVersionKinds) > 1 && len(preferredGVKs) > 0 {
+		groupVersionKind = preferredObjectKind(groupVersionKinds, preferredGVKs)
+	}
+
 	mapping, err := m.RESTMapping(groupVersionKind.GroupKind(), groupVersionKind.Version)
 	if err != nil {
 		return nil, fmt.Errorf("unable to recognize %v: %v", groupVersionKind, err)
@@ -110,4 +115,40 @@ func (m *Mapper) InfoForObject(obj runtime.Object) (*Info, error) {
 		Object:          obj,
 		ResourceVersion: resourceVersion,
 	}, nil
+}
+
+// preferredObjectKind picks the possibility that most closely matches the priority list in this order:
+// GroupVersionKind matches (exact match)
+// GroupKind matches
+// Group matches
+func preferredObjectKind(possibilities []schema.GroupVersionKind, preferences []schema.GroupVersionKind) schema.GroupVersionKind {
+	// Exact match
+	for _, priority := range preferences {
+		for _, possibility := range possibilities {
+			if possibility == priority {
+				return possibility
+			}
+		}
+	}
+
+	// GroupKind match
+	for _, priority := range preferences {
+		for _, possibility := range possibilities {
+			if possibility.GroupKind() == priority.GroupKind() {
+				return possibility
+			}
+		}
+	}
+
+	// Group match
+	for _, priority := range preferences {
+		for _, possibility := range possibilities {
+			if possibility.Group == priority.Group {
+				return possibility
+			}
+		}
+	}
+
+	// Just pick the first
+	return possibilities[0]
 }

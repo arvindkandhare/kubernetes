@@ -79,18 +79,32 @@ If your machines don't have any ephemeral disks, this will default to the aufs d
 
 **KUBE_OS_DISTRIBUTION**
 
-The distribution to use.  Valid options: `trusty`, `vivid`, `coreos`, `wheezy`, `jessie`
+The distribution to use.  Defaults to `jessie`
 
-Defaults to vivid (Ubuntu Vivid Vervet), which has a modern kernel and does not require updating or a reboot.
+Supported options:
 
-`coreos` is also a good option.
+* `jessie`: Debian Jessie, running a custom kubernetes-optimized image.  Should
+  be supported until 2018 by the debian-security team, and until 2020 by the
+  debian-LTS team.
+* `wily`: Ubuntu Wily.  Wily is not an LTS release, and OS support is due to
+  end in July 2016.
 
-Other options may require reboots, updates or configuration, and should be used only if you have a compelling
-requirement to do so.
+No longer supported as of 1.3:
+
+* `vivid`: Ubuntu Vivid.  Vivid OS support ended in early February 2016.
+  Docker no longer provides packages for vivid.
+
+Given the support situation, we recommend using Debian Jessie.  In Kubernetes
+1.3 Ubuntu should have their next LTS release out, so we should be able to
+recommend Ubuntu again at that time.
+
+Using kube-up with other operating systems is neither supported nor
+recommended.  But we would welcome increased OS support for kube-up, so please
+contribute!
 
 **NON_MASQUERADE_CIDR**
 
-The 'internal' IP range which Kuberenetes will use, which will therefore not
+The 'internal' IP range which Kubernetes will use, which will therefore not
 use IP masquerade.  By default kubernetes runs an internal network for traffic
 between pods (and between pods and services), and by default this uses the
 `10.0.0.0/8` range.  However, this sometimes overlaps with a range that you may
@@ -129,6 +143,15 @@ export SERVICE_CLUSTER_IP_RANGE="100.64.0.0/16"
 export DNS_SERVER_IP="100.64.0.10"
 export MASTER_IP_RANGE="100.65.0.0/24"
 export CLUSTER_IP_RANGE="100.66.0.0/16"
+```
+
+**KUBE_VPC_CIDR_BASE**
+
+By default `kube-up.sh` will create a VPC with CIDR 172.20.0.0/16. `KUBE_VPC_CIDR_BASE` allows to configure
+this CIDR. For example you may choose to use `172.21.0.0/16`:
+
+```
+export KUBE_VPC_CIDR_BASE=172.21
 ```
 
 [![Analytics](https://kubernetes-site.appspot.com/UA-36037335-10/GitHub/cluster/aws/options.md?pixel)]()

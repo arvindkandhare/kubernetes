@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,15 +19,15 @@ package kubelet
 import (
 	"testing"
 
-	"k8s.io/kubernetes/pkg/api"
-	"k8s.io/kubernetes/pkg/client/record"
-	"k8s.io/kubernetes/pkg/kubelet/cadvisor"
+	"k8s.io/client-go/pkg/api/v1"
+	"k8s.io/client-go/tools/record"
+	cadvisortest "k8s.io/kubernetes/pkg/kubelet/cadvisor/testing"
 )
 
 func TestBasic(t *testing.T) {
 	fakeRecorder := &record.FakeRecorder{}
-	mockCadvisor := &cadvisor.Fake{}
-	node := &api.ObjectReference{}
+	mockCadvisor := &cadvisortest.Fake{}
+	node := &v1.ObjectReference{}
 	oomWatcher := NewOOMWatcher(mockCadvisor, fakeRecorder)
 	err := oomWatcher.Start(node)
 	if err != nil {

@@ -1,4 +1,4 @@
-# Copyright 2016 The Kubernetes Authors All rights reserved.
+# Copyright 2016 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-TAG = 0.6
+TAG = 0.8
 PREFIX = gcr.io/google_containers
 
 all: push
 
 mt: mt.go
-	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-w' ./mt.go
+	CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -ldflags '-w' ./mt.go && \
+	chmod a+rx mt
 
 image: mt
-	sudo docker build -t $(PREFIX)/mounttest:$(TAG) .
+	sudo docker build --pull -t $(PREFIX)/mounttest:$(TAG) .
 
 push: image
-	gcloud docker push $(PREFIX)/mounttest:$(TAG)
+	gcloud docker -- push $(PREFIX)/mounttest:$(TAG)
 
 clean:
 	rm -f mt

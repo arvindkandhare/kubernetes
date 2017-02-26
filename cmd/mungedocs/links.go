@@ -1,5 +1,5 @@
 /*
-Copyright 2015 The Kubernetes Authors All rights reserved.
+Copyright 2015 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,6 +29,8 @@ import (
 var (
 	// Finds markdown links of the form [foo](bar "alt-text").
 	linkRE = regexp.MustCompile(`\[([^]]*)\]\(([^)]*)\)`)
+	// Finds markdown link typos of the form (foo)[bar]
+	badLinkRE = regexp.MustCompile(`\([^]()]*\)\[[^]()]*\]`)
 	// Splits the link target into link target and alt-text.
 	altTextRE = regexp.MustCompile(`([^)]*)( ".*")`)
 )
@@ -125,7 +127,15 @@ func updateLinks(filePath string, mlines mungeLines) (mungeLines, error) {
 	allErrs := []string{}
 
 	for lineNum, mline := range mlines {
-		if mline.preformatted || !mline.link {
+		if mline.preformatted {
+			out = append(out, mline)
+			continue
+		}
+		if badMatch := badLinkRE.FindString(mline.data); badMatch != "" {
+			allErrs = append(allErrs,
+				fmt.Sprintf("On line %d: found backwards markdown link %q", lineNum, badMatch))
+		}
+		if !mline.link {
 			out = append(out, mline)
 			continue
 		}

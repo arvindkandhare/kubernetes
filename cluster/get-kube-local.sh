@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright 2015 The Kubernetes Authors All rights reserved.
+# Copyright 2015 The Kubernetes Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ function create_cluster {
       --hostname-override="127.0.0.1" \
       --address="0.0.0.0" \
       --api-servers=http://localhost:8080 \
-      --config=/etc/kubernetes/manifests \
+      --pod-manifest-path=/etc/kubernetes/manifests \
       --allow-privileged=true \
       --cluster-dns=10.0.0.10 \
       --cluster-domain=cluster.local \
